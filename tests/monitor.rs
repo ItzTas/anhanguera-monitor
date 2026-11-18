@@ -13,10 +13,22 @@ use anhanguera_monitor::events::HOME_URL;
 use anhanguera_monitor::monitor::{CycleOutcome, Monitor, MonitorOptions};
 use anhanguera_monitor::store::{Store, StoredEvent};
 use chrono::{NaiveDate, TimeDelta};
+use tokio_postgres::NoTls;
 
 use support::fake_portal::FakePortal;
 use support::{MovableClock, migrated_database, next_signal, pending_signal, utc};
 
+const REFUSE_SITE_CHANGES: &str =
+    "CREATE FUNCTION refuse_site_changes() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.kind = 'site_changed' THEN
+        RAISE EXCEPTION 'site changes refused';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER refuse_site_changes BEFORE INSERT ON events
+FOR EACH ROW EXECUTE FUNCTION refuse_site_changes();";
+const ACCEPT_SITE_CHANGES: &str = "DROP TRIGGER refuse_site_changes ON events";
 const ENGINEERING: &str = "Engenharia de Software";
 const LAW: &str = "Direito";
 const BOLETO: &str = "https://boleto.example.test/inv-1.pdf";
@@ -155,6 +167,14 @@ fn unavailable() -> AvaError {
     AvaError::Unavailable("the portal answered HTTP 503".to_owned())
 }
 
+async fn run_sql(url: &str, sql: &str) {
+    let (client, connection) = tokio_postgres::connect(url, NoTls)
+        .await
+        .expect("connect to the test database");
+    tokio::spawn(connection);
+    client.batch_execute(sql).await.expect("run the SQL");
+}
+
 fn one_enrollment_with_an_open_invoice() -> FakePortal {
     let portal = FakePortal::new();
     portal.set_enrollments(Ok(vec![enrollment("ce-1", ENGINEERING)]));
@@ -266,6 +286,68 @@ async fn site_change_is_reported_again_after_recovery() {
             "site-changed:Invoices:billingDay:missing:2026-12-03",
         ]
     );
+}
+
+#[tokio::test]
+async fn site_change_is_retried_after_a_failed_write() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let clock = starting_clock();
+    let portal = FakePortal::new();
+    portal.set_enrollments(Ok(vec![enrollment("ce-1", ENGINEERING)]));
+    portal.set_invoices("ce-1", Err(site_change("Invoices", "billingDay")));
+    let monitor = prepared(&db.url, &portal, options(ENGINEERING, &clock)).await;
+    run_sql(&db.url, REFUSE_SITE_CHANGES).await;
+
+    monitor.run_cycle().await;
+
+    assert!(of_kind(&events(&monitor).await, "site_changed").is_empty());
+
+    run_sql(&db.url, ACCEPT_SITE_CHANGES).await;
+    clock.advance(TimeDelta::hours(1));
+    monitor.run_cycle().await;
+
+    let recorded = events(&monitor).await;
+    assert_eq!(
+        ids(&of_kind(&recorded, "site_changed")),
+        ["site-changed:Invoices:billingDay:missing:2026-12-01"]
+    );
+    let status = monitor.status_message().expect("a status message");
+    assert!(status.contains("Invoices:billingDay:missing"), "{status}");
+}
+
+#[tokio::test]
+async fn no_enrollments_raise_the_blind_alarm() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let clock = starting_clock();
+    let portal = FakePortal::new();
+    portal.set_enrollments(Ok(Vec::new()));
+    let monitor = prepared(&db.url, &portal, options(ENGINEERING, &clock)).await;
+
+    let first = monitor.run_cycle().await;
+
+    let CycleOutcome::Incomplete(reason) = first else {
+        panic!("expected an incomplete cycle, got {first:?}");
+    };
+    assert!(reason.contains("no course enrollments"), "{reason}");
+    for _ in 0..25 {
+        clock.advance(TimeDelta::hours(1));
+        assert!(matches!(
+            monitor.run_cycle().await,
+            CycleOutcome::Incomplete(_)
+        ));
+    }
+
+    let recorded = events(&monitor).await;
+    assert_eq!(
+        ids(&of_kind(&recorded, "monitor_blind")),
+        ["monitor-blind:2026-12-01T15:00:00Z"]
+    );
+    let status = monitor.status_message().expect("a status message");
+    assert!(status.contains("no course enrollments"), "{status}");
 }
 
 #[tokio::test]

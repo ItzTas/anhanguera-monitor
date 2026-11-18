@@ -70,6 +70,7 @@ const OPEN_PROBLEM: &str =
     "INSERT INTO problems (signature, area, first_seen_at) VALUES ($1, $2, $3)
 ON CONFLICT (signature) DO NOTHING";
 const CLEAR_PROBLEMS: &str = "DELETE FROM problems WHERE area = $1";
+const CLOSE_PROBLEM: &str = "DELETE FROM problems WHERE signature = $1";
 const OPEN_PROBLEMS: &str = "SELECT signature FROM problems ORDER BY signature";
 const PAYMENTS_FAILED: &str = "UPDATE monitor_state
 SET payments_failing_since = COALESCE(payments_failing_since, $1)
@@ -368,6 +369,14 @@ impl Store {
         self.client()
             .await?
             .execute(CLEAR_PROBLEMS, &[&area])
+            .await?;
+        Ok(())
+    }
+
+    pub async fn close_problem(&self, signature: &str) -> Result<(), StoreError> {
+        self.client()
+            .await?
+            .execute(CLOSE_PROBLEM, &[&signature])
             .await?;
         Ok(())
     }

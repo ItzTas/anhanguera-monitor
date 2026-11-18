@@ -231,6 +231,38 @@ async fn open_problem_reports_new_only_once_until_cleared() {
 }
 
 #[tokio::test]
+async fn a_closed_problem_opens_as_new_again() {
+    let Some(db) = support::migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    for signature in ["sig", "other"] {
+        assert!(
+            store
+                .open_problem(signature, "payments", start())
+                .await
+                .expect("open")
+        );
+    }
+
+    store.close_problem("sig").await.expect("close");
+
+    assert_eq!(store.open_problems().await.expect("open"), ["other"]);
+    assert!(
+        store
+            .open_problem("sig", "payments", start())
+            .await
+            .expect("sig again")
+    );
+    assert!(
+        !store
+            .open_problem("other", "payments", start())
+            .await
+            .expect("other again")
+    );
+}
+
+#[tokio::test]
 async fn payments_streak_starts_once_and_success_clears_it() {
     let Some(db) = support::migrated_database().await else {
         return;

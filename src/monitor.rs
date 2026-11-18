@@ -31,6 +31,7 @@ const KEEP_EVENTS: i64 = 200;
 const KEEP_KEYS_DAYS: i64 = 400;
 const DATABASE_UNAVAILABLE: &str = "the database is unavailable";
 const BOLETO_UNAVAILABLE: &str = "boleto link unavailable";
+const NO_ENROLLMENTS: &str = "the portal listed no course enrollments";
 
 pub struct MonitorOptions {
     pub courses: Vec<String>,
@@ -87,6 +88,7 @@ pub struct Monitor<P> {
 #[derive(Default)]
 struct Memory {
     login_streak: Option<LoginStreak>,
+    no_enrollments: bool,
     missing_courses: Vec<String>,
     boleto_unavailable: bool,
     problems: Vec<String>,
@@ -191,6 +193,9 @@ impl<P: Portal> Monitor<P> {
                 memory.problems.join(", ")
             ));
         }
+        if memory.no_enrollments {
+            parts.push(NO_ENROLLMENTS.to_owned());
+        }
         parts.extend(memory.missing_courses.iter().cloned());
         let boleto_unavailable = memory.boleto_unavailable;
         drop(memory);
@@ -260,6 +265,12 @@ impl<P: Portal> Monitor<P> {
         sent: &HashSet<String>,
         now: DateTime<Utc>,
     ) -> Vec<String> {
+        self.memory().no_enrollments = enrollments.is_empty();
+        if enrollments.is_empty() {
+            let tracked = self.track_payments(false, now).await;
+            let unlisted = format!("payments: {NO_ENROLLMENTS}");
+            return std::iter::once(unlisted).chain(tracked).collect();
+        }
         let areas: Vec<_> = enrollments
             .iter()
             .map(|enrollment| self.payment_area(enrollment, sent, now))
@@ -631,7 +642,15 @@ impl<P: Portal> Monitor<P> {
         }
         let today = local_today(now, self.options.tz);
         let event = site_changed_event(area, problem, &signature, today, now);
-        self.record(&events_batch(vec![event])).await
+        let Err(failure) = self.record(&events_batch(vec![event])).await else {
+            return Ok(());
+        };
+        warn!(
+            area = %area.label,
+            error = &failure as &dyn Error,
+            "could not record the site change; the next cycle tries again"
+        );
+        self.store.close_problem(&signature).await
     }
 
     async fn login_rejected(&self, now: DateTime<Utc>) -> Result<(), StoreError> {
