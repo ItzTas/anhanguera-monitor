@@ -566,6 +566,10 @@ impl<P: Portal> Monitor<P> {
         enrollments: &[CourseEnrollment],
         now: DateTime<Utc>,
     ) -> Option<String> {
+        if enrollments.is_empty() {
+            self.memory().missing_courses = Vec::new();
+            return None;
+        }
         let available: BTreeSet<&str> = enrollments
             .iter()
             .map(|enrollment| enrollment.course_name.as_str())

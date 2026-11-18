@@ -470,10 +470,7 @@ async fn status_shows_what_the_monitor_cannot_do() {
     );
     let blind = status(&plugin).await;
     assert_eq!(blind.state, i32::from(State::Failing));
-    assert_eq!(
-        blind.message,
-        "the portal listed no course enrollments; course \"Direito\" not found (available: none)"
-    );
+    assert_eq!(blind.message, "the portal listed no course enrollments");
 
     portal.set_enrollments(Ok(vec![enrollment()]));
     assert_eq!(

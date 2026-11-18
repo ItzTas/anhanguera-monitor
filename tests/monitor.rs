@@ -569,6 +569,34 @@ async fn missing_course_is_reported_once_and_listed_in_status() {
 }
 
 #[tokio::test]
+async fn an_empty_course_list_reports_no_missing_course() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let clock = starting_clock();
+    let portal = FakePortal::new();
+    portal.set_enrollments(Ok(Vec::new()));
+    let monitor = prepared(&db.url, &portal, options(ENGINEERING, &clock)).await;
+
+    monitor.run_cycle().await;
+
+    assert!(of_kind(&events(&monitor).await, "course_not_found").is_empty());
+    let status = monitor.status_message().expect("a status message");
+    assert!(!status.contains("not found"), "{status}");
+
+    portal.set_enrollments(Ok(vec![enrollment("ce-2", LAW)]));
+    clock.advance(TimeDelta::hours(1));
+    monitor.run_cycle().await;
+
+    let recorded = events(&monitor).await;
+    let missing = of_kind(&recorded, "course_not_found");
+    assert_eq!(ids(&missing), ["course-not-found:engenharia de software"]);
+    assert_eq!(missing[0].occurred_at, clock.now());
+    let status = monitor.status_message().expect("a status message");
+    assert!(status.contains("not found"), "{status}");
+}
+
+#[tokio::test]
 async fn payments_cover_enrollments_outside_courses() {
     let Some(db) = migrated_database().await else {
         return;
