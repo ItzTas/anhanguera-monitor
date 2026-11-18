@@ -3,6 +3,7 @@ pub mod ava;
 pub mod config;
 pub mod dates;
 pub mod events;
+pub mod payments;
 pub mod portal;
 pub mod reminders;
 pub mod secret;
