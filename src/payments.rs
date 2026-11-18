@@ -294,6 +294,9 @@ fn close(ctx: &Context, record: &mut KnownInvoice) -> Step {
     if !record.announced || record.closed_at.is_some() {
         return Step::default();
     }
+    if !in_reminder_hours(&ctx.options.reminders, ctx.input.now) {
+        return Step::default();
+    }
     record.closed_at = Some(ctx.input.now);
     let day = format_day(record.due_date);
     let closed_at = ctx.input.now.to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -934,6 +937,27 @@ mod tests {
             world.ids(&home, "2026-12-09T12:00:00Z"),
             ["payment-due:inv-1:2026-12-10:1"]
         );
+    }
+
+    #[test]
+    fn invoice_closed_at_night_waits_for_the_reminder_hour() {
+        let home = open("2026-12-10");
+        let paid = fixture()
+            .invoice("inv-1", InvoiceStatus::Paid, "2026-12-10")
+            .build();
+        for after in [paid, empty()] {
+            let mut world = World::new();
+            world.cycle(&home, "2026-12-05T15:00:00Z");
+            for now in ["2026-12-06T06:00:00Z", "2026-12-06T11:59:00Z"] {
+                assert!(world.cycle(&after, now).is_empty(), "{now}");
+                assert_eq!(world.invoice("inv-1").closed_at, None, "{now}");
+            }
+            assert_eq!(
+                world.ids(&after, "2026-12-06T12:00:00Z"),
+                ["invoice-closed:inv-1:2026-12-10:2026-12-06T12:00:00Z"]
+            );
+            assert!(world.cycle(&after, "2026-12-06T18:00:00Z").is_empty());
+        }
     }
 
     #[test]
