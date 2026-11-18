@@ -187,7 +187,8 @@ early.
    - **Coursework**, for the enrollments whose course name matches `COURSES`: subject deadlines,
      the calendar, and one unit-quiz call per in-progress subject (three at a time).
    - **Courses**: a configured name with no match records one `course_not_found` event, and the
-     status lists the available names.
+     status lists the available names. An empty course list skips this check, because the hub
+     keeps that event's id forever and the list may come back.
 3. Each area validates its answers strictly before it records anything. A problem stops that area
    for that enrollment. It becomes one `site_changed` event, keyed by a signature of operation,
    field and kind, and it repeats only after a full successful cycle of the area cleared it. If
