@@ -326,13 +326,22 @@ fn operations(calls: Vec<Call>) -> Map<String, Value> {
         .collect()
 }
 
-fn lookup(name: &str) -> Option<String> {
-    let found = |key: &str| std::env::var(key).ok().filter(|value| !value.is_empty());
-    found(name).or_else(|| found(&format!("{ENV_PREFIX}{name}")))
+fn environment_lookup() -> impl Fn(&str) -> Option<String> {
+    let under_hub = std::env::vars_os()
+        .any(|(name, _)| name.as_encoded_bytes().starts_with(ENV_PREFIX.as_bytes()));
+    let prefix = match under_hub {
+        true => ENV_PREFIX,
+        false => "",
+    };
+    move |name| {
+        std::env::var(format!("{prefix}{name}"))
+            .ok()
+            .filter(|value| !value.is_empty())
+    }
 }
 
 fn load_config() -> Result<Config, String> {
-    let document = config::document_from_env(&lookup).map_err(|problems| {
+    let document = config::document_from_env(&environment_lookup()).map_err(|problems| {
         let lines: Vec<String> = problems
             .iter()
             .map(|problem| format!("{}: {}", problem.path, problem.message))

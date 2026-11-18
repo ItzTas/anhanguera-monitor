@@ -60,7 +60,7 @@ fn probe_env(database_url: &str, graphql_url: &str) -> Vec<(&'static str, String
             "Analise e desenvolvimento de sistemas",
         ),
         ("ANHANGUERA__DATABASE_URL", database_url),
-        ("AVA_GRAPHQL_URL", graphql_url),
+        ("ANHANGUERA__AVA_GRAPHQL_URL", graphql_url),
     ]
     .into_iter()
     .map(|(name, value)| (name, value.to_owned()))
@@ -122,6 +122,56 @@ async fn probe_prints_shapes_with_prefixed_variables() {
             {"days": 3, "learned": false},
         ])
     );
+}
+
+#[tokio::test]
+async fn probe_reads_only_prefixed_variables_when_any_is_set() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    Store::new(&db.url)
+        .expect("open the store")
+        .initialize(new_device_id(), Utc::now())
+        .await
+        .expect("initialize the state");
+    let ava = FakeAva::start().await;
+    let mut env = probe_env(&db.url, &ava.url());
+    env.push((
+        "DATABASE_URL",
+        "postgres://nobody@127.0.0.1:1/nowhere".to_owned(),
+    ));
+    env.push(("DATABASE_URL_FILE", "/nonexistent/database-url".to_owned()));
+    env.push(("AVA_PASSWORD", "wrong-password".to_owned()));
+
+    let output = probe(env).await;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    let document: Value = serde_json::from_slice(&output.stdout).expect("stdout is JSON");
+    assert_eq!(document["operations"]["Invoices"]["verdict"], "ok");
+}
+
+#[tokio::test]
+async fn probe_reads_unprefixed_variables_when_no_prefixed_one_is_set() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    Store::new(&db.url)
+        .expect("open the store")
+        .initialize(new_device_id(), Utc::now())
+        .await
+        .expect("initialize the state");
+    let ava = FakeAva::start().await;
+    let env = probe_env(&db.url, &ava.url())
+        .into_iter()
+        .map(|(name, value)| (name.trim_start_matches("ANHANGUERA__"), value))
+        .collect();
+
+    let output = probe(env).await;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert!(!ava.requests().is_empty());
 }
 
 #[tokio::test]
