@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::time::Duration;
 
+use crate::events::{Kind, NewEvent};
 use chrono::{DateTime, NaiveDate, Utc};
 use deadpool_postgres::{Manager, Pool, PoolError, Runtime, TimeoutType};
 use monitor_hub_plugin::migrate::{MigrateError, Migration, up};
@@ -124,17 +125,6 @@ impl From<tokio_postgres::Error> for StoreError {
         };
         StoreError::Timeout(step)
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct NewEvent {
-    pub id: String,
-    pub kind: &'static str,
-    pub urgent: bool,
-    pub title: String,
-    pub body: String,
-    pub url: String,
-    pub occurred_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -535,7 +525,7 @@ fn pool_error(error: PoolError) -> StoreError {
 fn welcome(at: DateTime<Utc>) -> NewEvent {
     NewEvent {
         id: "welcome".to_owned(),
-        kind: "welcome",
+        kind: Kind::Welcome.id(),
         urgent: false,
         title: "Anhanguera monitor is running".to_owned(),
         body: "The monitor is connected and will announce new invoices and reminders here."

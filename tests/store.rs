@@ -1,6 +1,7 @@
 pub mod support;
 
-use anhanguera_monitor::store::{EnrollmentState, KnownInvoice, NewEvent, RecordBatch, Store};
+use anhanguera_monitor::events::NewEvent;
+use anhanguera_monitor::store::{EnrollmentState, KnownInvoice, RecordBatch, Store};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 
 fn start() -> DateTime<Utc> {
