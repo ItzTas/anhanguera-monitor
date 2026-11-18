@@ -23,7 +23,7 @@ use crate::store::{EnrollmentState, KnownInvoice, RecordBatch, Store, StoreError
 use crate::text::{course_key, one_line};
 use crate::timestamp::Clock;
 
-const STATUS_MAX: usize = 300;
+pub(crate) const STATUS_MAX: usize = 300;
 const TITLE_MAX: usize = 80;
 const LINE_MAX: usize = 300;
 const QUIZ_CALLS: usize = 3;

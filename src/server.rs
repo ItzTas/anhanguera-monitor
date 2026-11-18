@@ -15,10 +15,11 @@ use tonic::{Request, Response, Status};
 use tracing::{error, warn};
 
 use crate::events::Kind;
-use crate::monitor::DATABASE_UNAVAILABLE;
+use crate::monitor::{DATABASE_UNAVAILABLE, STATUS_MAX};
 use crate::portal::Portal;
 use crate::scheduler::{CycleState, Scheduler};
 use crate::store::{StoreError, StoredEvent};
+use crate::text::one_line;
 
 const PLUGIN_NAME: &str = "anhanguera";
 const DISPLAY_NAME: &str = "Anhanguera";
@@ -262,8 +263,10 @@ fn state_and_message(
     if cycle.running {
         return (State::Checking, String::new());
     }
-    if let Some(message) = message.or_else(|| cycle.problem.clone()) {
-        return (State::Failing, message);
+    let mut reasons: Vec<String> = message.into_iter().chain(cycle.problem.clone()).collect();
+    reasons.dedup();
+    if !reasons.is_empty() {
+        return (State::Failing, one_line(&reasons.join("; "), STATUS_MAX));
     }
     if !database_answered {
         return (State::Failing, DATABASE_UNAVAILABLE.to_owned());
@@ -300,7 +303,7 @@ mod tests {
     use tokio_postgres::NoTls;
     use tonic::Request;
 
-    use super::{AnhangueraPlugin, HUB_AHEAD, STATUS_QUERY_LIMIT};
+    use super::{AnhangueraPlugin, HUB_AHEAD, STATUS_QUERY_LIMIT, state_and_message};
     use crate::ava::AvaError;
     use crate::ava::model::{CalendarEvent, CourseEnrollment, InvoiceHome, Quiz, Subject};
     use crate::config::BillingDayNet;
@@ -309,7 +312,7 @@ mod tests {
     use crate::payments::PaymentOptions;
     use crate::portal::Portal;
     use crate::reminders::ReminderRule;
-    use crate::scheduler::Scheduler;
+    use crate::scheduler::{CycleState, Scheduler};
     use crate::store::{MIGRATIONS, Store};
 
     struct SilentPortal;
@@ -392,6 +395,40 @@ mod tests {
         let (mut client, connection) = tokio_postgres::connect(url, NoTls).await.expect("connect");
         tokio::spawn(connection);
         up(&mut client, MIGRATIONS).await.expect("migrate");
+    }
+
+    #[test]
+    fn a_failing_status_names_the_standing_note_and_the_cycle_problem() {
+        let failed = |problem: Option<&str>| CycleState {
+            problem: problem.map(str::to_owned),
+            ..CycleState::default()
+        };
+        let note = Some("boleto link unavailable".to_owned());
+        let cases = [
+            (
+                note.clone(),
+                failed(Some("payments for A: portal unavailable: down")),
+                "boleto link unavailable; payments for A: portal unavailable: down",
+            ),
+            (note.clone(), failed(None), "boleto link unavailable"),
+            (None, failed(Some("courses: down")), "courses: down"),
+            (
+                note.clone(),
+                failed(Some("boleto link unavailable")),
+                "boleto link unavailable",
+            ),
+        ];
+        for (message, cycle, expected) in cases {
+            let (state, text) = state_and_message(&cycle, message, true, false);
+            assert_eq!(state, State::Failing, "{expected}");
+            assert_eq!(text, expected);
+        }
+
+        let long = failed(Some(&"x".repeat(400)));
+        let (_, text) = state_and_message(&long, note, true, false);
+        assert_eq!(text.chars().count(), 300);
+        assert!(text.starts_with("boleto link unavailable; xxx"), "{text}");
+        assert!(text.ends_with('…'), "{text}");
     }
 
     #[test]
