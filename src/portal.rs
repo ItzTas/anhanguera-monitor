@@ -11,7 +11,7 @@ use crate::ava::model::{
 };
 use crate::ava::{AvaClient, AvaError, Operation};
 
-const CALENDAR_CATEGORIES: [&str; 5] = [
+pub const CALENDAR_CATEGORIES: [&str; 5] = [
     "ACADEMIC_DATES",
     "UNIQUE_EVENTS",
     "SECRETARIAT",

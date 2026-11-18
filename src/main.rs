@@ -16,6 +16,9 @@ fn main() -> ExitCode {
     if arguments == ["validate-settings"] {
         return validate_settings();
     }
+    if arguments == ["probe"] {
+        return anhanguera_monitor::probe::run();
+    }
     if arguments == ["plugin"] && launched_by_hub() {
         return run_plugin();
     }

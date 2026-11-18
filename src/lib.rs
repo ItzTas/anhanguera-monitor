@@ -9,6 +9,7 @@ mod logtest;
 pub mod monitor;
 pub mod payments;
 pub mod portal;
+pub mod probe;
 pub mod reminders;
 pub mod scheduler;
 pub mod secret;
