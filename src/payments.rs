@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use chrono::{DateTime, Datelike, Months, NaiveDate, TimeDelta, Utc};
+use chrono::{DateTime, Datelike, Months, NaiveDate, SecondsFormat, TimeDelta, Utc};
 
 use crate::ava::model::{InformationType, Invoice, InvoiceHome, InvoiceStatus};
 use crate::config::BillingDayNet;
-use crate::dates::{days_left, format_day, local_today, month_day_clamped, reminder_instant};
+use crate::dates::{days_left, format_day, local_today, month_day_clamped};
 use crate::events::{HOME_URL, Kind, NewEvent, due_phrase};
-use crate::reminders::{DueReminder, ReminderRule, due_threshold};
+use crate::reminders::{DueReminder, ReminderRule, due_threshold, in_reminder_hours};
 use crate::store::{EnrollmentState, KnownInvoice, RecordBatch};
 use crate::text::one_line;
 
@@ -221,6 +221,9 @@ fn announce(ctx: &Context, invoice: &Invoice, record: &mut KnownInvoice) -> Step
 }
 
 fn payment_due(ctx: &Context, invoice: &Invoice) -> Step {
+    if !in_reminder_hours(&ctx.options.reminders, ctx.input.now) {
+        return Step::default();
+    }
     let Some(due) = crossed_reminder(ctx, invoice) else {
         return Step::default();
     };
@@ -273,8 +276,7 @@ fn overdue(ctx: &Context, invoice: &Invoice, record: &mut KnownInvoice) -> Step 
 }
 
 fn overdue_reminder_due(ctx: &Context, record: &KnownInvoice) -> bool {
-    let rule = &ctx.options.reminders;
-    if ctx.input.now < reminder_instant(ctx.today, 0, rule.hour, rule.tz) {
+    if !in_reminder_hours(&ctx.options.reminders, ctx.input.now) {
         return false;
     }
     if record.overdue_count == 0 {
@@ -294,10 +296,14 @@ fn close(ctx: &Context, record: &mut KnownInvoice) -> Step {
     }
     record.closed_at = Some(ctx.input.now);
     let day = format_day(record.due_date);
+    let closed_at = ctx.input.now.to_rfc3339_opts(SecondsFormat::Secs, true);
     Step::event(notice(
         ctx,
         Kind::InvoiceClosed,
-        format!("invoice-closed:{}:{}", record.id, record.due_date),
+        format!(
+            "invoice-closed:{}:{}:{closed_at}",
+            record.id, record.due_date
+        ),
         format!("Invoice due {day} is no longer open"),
         format!(
             "Invoice due {day} is no longer open on the portal. If you did not pay it, check the Financeiro page."
@@ -359,6 +365,9 @@ fn billing_day(ctx: &Context) -> Step {
     let (Some(days), Some(billing_day)) = (net_days(ctx), ctx.input.home.billing_day) else {
         return Step::default();
     };
+    if !in_reminder_hours(&ctx.options.reminders, ctx.input.now) {
+        return Step::default();
+    }
     let due = next_due_date(ctx.today, billing_day);
     if month_has_invoice(ctx, due) {
         return Step::default();
@@ -793,7 +802,10 @@ mod tests {
             ["payment-overdue:inv-1:2026-12-10:2"]
         );
         let closed = world.cycle(&paid, "2026-12-13T18:00:00Z");
-        assert_eq!(ids(&closed), ["invoice-closed:inv-1:2026-12-10"]);
+        assert_eq!(
+            ids(&closed),
+            ["invoice-closed:inv-1:2026-12-10:2026-12-13T18:00:00Z"]
+        );
         assert_eq!(closed[0].event.kind, "invoice_closed");
         assert_eq!(
             closed[0].event.title,
@@ -868,7 +880,11 @@ mod tests {
         );
         assert_eq!(
             world.ids(&empty(), "2026-11-25T15:00:00Z"),
-            ["invoice-closed:inv-1:2026-12-10"]
+            ["invoice-closed:inv-1:2026-12-10:2026-11-25T15:00:00Z"]
+        );
+        assert_eq!(
+            world.invoice("inv-1").closed_at,
+            Some(at("2026-11-25T15:00:00Z"))
         );
         assert!(world.cycle(&home, "2026-11-28T15:00:00Z").is_empty());
         assert_eq!(world.invoice("inv-1").closed_at, None);
@@ -876,6 +892,10 @@ mod tests {
         assert_eq!(
             world.ids(&home, "2026-12-03T12:00:00Z"),
             ["payment-due:inv-1:2026-12-10:7"]
+        );
+        assert_eq!(
+            world.ids(&empty(), "2026-12-04T15:00:00Z"),
+            ["invoice-closed:inv-1:2026-12-10:2026-12-04T15:00:00Z"]
         );
 
         let paid = fixture()
@@ -885,13 +905,84 @@ mod tests {
         settled.cycle(&home, "2026-11-20T15:00:00Z");
         assert_eq!(
             settled.ids(&paid, "2026-11-25T15:00:00Z"),
-            ["invoice-closed:inv-1:2026-12-10"]
+            ["invoice-closed:inv-1:2026-12-10:2026-11-25T15:00:00Z"]
         );
         assert_eq!(
             settled.ids(&home, "2026-12-08T15:00:00Z"),
             ["payment-due:inv-1:2026-12-10:3"]
         );
         assert_eq!(settled.invoice("inv-1").closed_at, None);
+        assert_eq!(
+            settled.ids(&paid, "2026-12-08T18:00:00Z"),
+            ["invoice-closed:inv-1:2026-12-10:2026-12-08T18:00:00Z"]
+        );
+    }
+
+    #[test]
+    fn open_at_night_covers_crossed_thresholds_until_the_next_one() {
+        let home = open("2026-12-10");
+        let mut world = World::new();
+        assert_eq!(
+            world.ids(&home, "2026-12-08T06:00:00Z"),
+            ["invoice-open:inv-1"]
+        );
+        assert!(world.sent.contains("payment-due:inv-1:2026-12-10:3"));
+        for now in ["2026-12-08T12:00:00Z", "2026-12-08T20:00:00Z"] {
+            assert!(world.cycle(&home, now).is_empty(), "{now}");
+        }
+        assert_eq!(
+            world.ids(&home, "2026-12-09T12:00:00Z"),
+            ["payment-due:inv-1:2026-12-10:1"]
+        );
+    }
+
+    #[test]
+    fn overdue_found_at_night_waits_for_the_reminder_hour() {
+        let home = open("2026-12-10");
+        let mut world = World::new();
+        assert_eq!(
+            world.ids(&home, "2026-12-14T06:00:00Z"),
+            ["invoice-open:inv-1"]
+        );
+        assert!(world.cycle(&home, "2026-12-14T11:59:00Z").is_empty());
+        assert_eq!(
+            world.ids(&home, "2026-12-14T12:00:00Z"),
+            ["payment-overdue:inv-1:2026-12-10:0"]
+        );
+    }
+
+    #[test]
+    fn reminder_crossed_while_away_waits_for_the_reminder_hour() {
+        let home = open("2026-12-10");
+        let mut down = World::new();
+        down.cycle(&home, "2026-11-20T15:00:00Z");
+        assert!(down.cycle(&home, "2026-12-08T06:00:00Z").is_empty());
+        assert!(down.cycle(&home, "2026-12-08T11:59:00Z").is_empty());
+        assert_eq!(
+            down.ids(&home, "2026-12-08T12:00:00Z"),
+            ["payment-due:inv-1:2026-12-10:3"]
+        );
+
+        let mut away = World::new();
+        away.cycle(&home, "2026-11-20T15:00:00Z");
+        away.cycle(&empty(), "2026-11-25T15:00:00Z");
+        assert!(away.cycle(&home, "2026-12-08T06:00:00Z").is_empty());
+        assert_eq!(away.invoice("inv-1").closed_at, None);
+        assert_eq!(
+            away.ids(&home, "2026-12-08T12:00:00Z"),
+            ["payment-due:inv-1:2026-12-10:3"]
+        );
+    }
+
+    #[test]
+    fn billing_day_net_crossed_while_down_waits_for_the_reminder_hour() {
+        let mut world = World::new();
+        assert!(world.cycle(&empty(), "2026-12-08T06:00:00Z").is_empty());
+        assert!(!world.sent.contains("billing-day:ce-1:2026-12"));
+        assert_eq!(
+            world.ids(&empty(), "2026-12-08T12:00:00Z"),
+            ["billing-day:ce-1:2026-12"]
+        );
     }
 
     #[test]

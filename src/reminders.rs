@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Timelike, Utc};
 use chrono_tz::Tz;
 
 use crate::dates::{local_today, reminder_instant};
@@ -42,6 +42,10 @@ pub fn due_threshold(
         threshold: closest,
         mark_sent: crossed.into_iter().map(key).collect(),
     })
+}
+
+pub fn in_reminder_hours(rule: &ReminderRule, now: DateTime<Utc>) -> bool {
+    now.with_timezone(&rule.tz).hour() >= rule.hour
 }
 
 #[cfg(test)]
@@ -115,5 +119,19 @@ mod tests {
             due_threshold(&rule(), date(), now, &HashSet::new(), &key),
             None
         );
+    }
+
+    #[test]
+    fn reminder_hours_run_from_the_hour_to_local_midnight() {
+        let cases = [
+            ("2026-12-08T03:00:00Z", false),
+            ("2026-12-08T06:00:00Z", false),
+            ("2026-12-08T11:59:59Z", false),
+            ("2026-12-08T12:00:00Z", true),
+            ("2026-12-09T02:59:59Z", true),
+        ];
+        for (now, want) in cases {
+            assert_eq!(in_reminder_hours(&rule(), at(now)), want, "{now}");
+        }
     }
 }
