@@ -165,23 +165,20 @@ impl AvaClient {
             return Ok(None);
         }
         if !status.is_success() {
-            return Err(AvaError::Unavailable(format!(
-                "the portal answered HTTP {}",
-                status.as_u16()
-            )));
+            let errors = body
+                .as_ref()
+                .filter(|_| status.is_client_error())
+                .and_then(graphql_errors)
+                .ok_or_else(|| {
+                    AvaError::Unavailable(format!("the portal answered HTTP {}", status.as_u16()))
+                })?;
+            return classify_errors(operation, errors);
         }
         let body = body.ok_or_else(|| AvaError::Unavailable(NOT_JSON.to_owned()))?;
         let Some(errors) = graphql_errors(&body) else {
             return Ok(Some(body));
         };
-        if errors.iter().any(is_authentication_error) {
-            return Ok(None);
-        }
-        Err(AvaError::Schema(Problem {
-            operation: operation.name(),
-            field: "errors".to_owned(),
-            kind: ProblemKind::GraphqlError(first_message(errors)),
-        }))
+        classify_errors(operation, errors)
     }
 
     async fn token(&self) -> Result<Secret, AvaError> {
@@ -288,6 +285,17 @@ fn graphql_errors(body: &Value) -> Option<&Vec<Value>> {
     body.get("errors")?
         .as_array()
         .filter(|errors| !errors.is_empty())
+}
+
+fn classify_errors(operation: Operation, errors: &[Value]) -> Result<Option<Value>, AvaError> {
+    if errors.iter().any(is_authentication_error) {
+        return Ok(None);
+    }
+    Err(AvaError::Schema(Problem {
+        operation: operation.name(),
+        field: "errors".to_owned(),
+        kind: ProblemKind::GraphqlError(first_message(errors)),
+    }))
 }
 
 fn is_authentication_error(error: &Value) -> bool {

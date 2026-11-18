@@ -31,7 +31,7 @@ pub struct FakeAva {
 
 struct Portal {
     url: String,
-    answers: Mutex<HashMap<String, (u16, Value)>>,
+    answers: Mutex<HashMap<String, (u16, String)>>,
     requests: Mutex<Vec<RecordedRequest>>,
     expire: AtomicBool,
 }
@@ -64,7 +64,11 @@ impl FakeAva {
     }
 
     pub fn set(&self, operation: &str, status: u16, body: Value) {
-        lock(&self.portal.answers).insert(operation.to_owned(), (status, body));
+        self.set_text(operation, status, &body.to_string());
+    }
+
+    pub fn set_text(&self, operation: &str, status: u16, body: &str) {
+        lock(&self.portal.answers).insert(operation.to_owned(), (status, body.to_owned()));
     }
 
     pub fn expire_tokens(&self) {
@@ -104,28 +108,26 @@ async fn handle(State(portal): State<Arc<Portal>>, headers: HeaderMap, body: Byt
     }
     let answer = lock(&portal.answers).get(&operation).cloned();
     if let Some((status, body)) = answer {
-        return reply(status, &body);
+        return reply(status, body);
     }
     if operation == LOGIN && variables["password"] != ACCEPTED_PASSWORD {
         return reply(
             200,
-            &json!({"errors": [{"message": "Invalid credentials"}]}),
+            json!({"errors": [{"message": "Invalid credentials"}]}).to_string(),
         );
     }
     match fs::read_to_string(format!("{TESTDATA}/{operation}.json")) {
-        Ok(text) => reply(200, &serde_json::from_str(&text).expect("fixture is JSON")),
-        Err(_) => reply(404, &json!({"errors": [{"message": "no fixture"}]})),
+        Ok(text) => reply(200, text),
+        Err(_) => reply(
+            404,
+            json!({"errors": [{"message": "no fixture"}]}).to_string(),
+        ),
     }
 }
 
-fn reply(status: u16, body: &Value) -> Response {
+fn reply(status: u16, body: String) -> Response {
     let status = StatusCode::from_u16(status).expect("valid status");
-    (
-        status,
-        [("content-type", "application/json")],
-        body.to_string(),
-    )
-        .into_response()
+    (status, [("content-type", "application/json")], body).into_response()
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

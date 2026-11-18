@@ -165,32 +165,109 @@ async fn rejected_password_backs_off_for_six_hours() {
 }
 
 #[tokio::test]
-async fn graphql_errors_are_schema_problems() {
+async fn graphql_errors_are_schema_problems_with_or_without_a_client_error_status() {
+    for status in [200, 400] {
+        let fake = FakeAva::start().await;
+        let (clock, _) = movable_clock();
+        let client = portal_client(&fake, "test-password", clock);
+        fake.set(
+            "Invoices",
+            status,
+            json!({"errors": [{
+                "message": "Cannot query field \"formattedAmount\" on type \"Invoice\".",
+                "extensions": {"code": "GRAPHQL_VALIDATION_FAILED"}
+            }]}),
+        );
+
+        let error = client.invoices("ce-1").await.expect_err("schema");
+
+        assert!(
+            matches!(
+                &error,
+                AvaError::Schema(Problem {
+                    operation: "Invoices",
+                    kind: ProblemKind::GraphqlError(_),
+                    ..
+                })
+            ),
+            "HTTP {status}: {error}"
+        );
+        assert_eq!(count(&fake, "Invoices"), 1, "HTTP {status}");
+        assert_eq!(count(&fake, "LoginStudent"), 1, "HTTP {status}");
+    }
+}
+
+#[tokio::test]
+async fn unauthenticated_graphql_errors_log_in_again_and_retry_once() {
+    for status in [200, 400] {
+        let fake = FakeAva::start().await;
+        let (clock, _) = movable_clock();
+        let client = portal_client(&fake, "test-password", clock);
+        fake.set(
+            "StudentId",
+            status,
+            json!({"errors": [{
+                "message": "Unauthorized",
+                "extensions": {"code": "UNAUTHENTICATED"}
+            }]}),
+        );
+
+        let error = client
+            .execute(Operation::StudentId, Value::Null)
+            .await
+            .expect_err("refused");
+
+        assert!(
+            matches!(&error, AvaError::Unavailable(text) if text == "the portal refused the session"),
+            "HTTP {status}: {error}"
+        );
+        assert_eq!(count(&fake, "StudentId"), 2, "HTTP {status}");
+        assert_eq!(count(&fake, "LoginStudent"), 2, "HTTP {status}");
+        assert_eq!(client.login_backoff_until(), None, "HTTP {status}");
+    }
+}
+
+#[tokio::test]
+async fn client_errors_without_graphql_errors_are_unavailable() {
+    for (status, body) in [(400, ""), (404, "<html>not found</html>"), (422, "{}")] {
+        let fake = FakeAva::start().await;
+        let (clock, _) = movable_clock();
+        let client = portal_client(&fake, "test-password", clock);
+        fake.set_text("StudentId", status, body);
+
+        let error = client
+            .execute(Operation::StudentId, Value::Null)
+            .await
+            .expect_err("unavailable");
+
+        let expected = format!("the portal answered HTTP {status}");
+        assert!(
+            matches!(&error, AvaError::Unavailable(text) if *text == expected),
+            "HTTP {status}: {error}"
+        );
+        assert_eq!(count(&fake, "StudentId"), 1, "HTTP {status}");
+    }
+}
+
+#[tokio::test]
+async fn an_answer_that_is_not_json_is_unavailable() {
     let fake = FakeAva::start().await;
     let (clock, _) = movable_clock();
     let client = portal_client(&fake, "test-password", clock);
-    fake.set(
-        "StudentId",
-        200,
-        json!({"errors": [{"message": "Cannot query field \"id\""}]}),
-    );
+    fake.set_text("StudentId", 200, "<html>maintenance</html>");
 
     let error = client
         .execute(Operation::StudentId, Value::Null)
         .await
-        .expect_err("schema");
-    assert!(matches!(
-        error,
-        AvaError::Schema(Problem {
-            operation: "StudentId",
-            kind: ProblemKind::GraphqlError(_),
-            ..
-        })
-    ));
+        .expect_err("unavailable");
+
+    assert!(
+        matches!(&error, AvaError::Unavailable(text) if text == "the portal answered something that is not JSON")
+    );
 }
 
 #[tokio::test]
-async fn server_errors_are_unavailable_and_never_echo_the_password() {
+async fn a_login_server_error_is_unavailable_without_backoff_and_never_echoes_the_password() {
     let fake = FakeAva::start().await;
     let (clock, _) = movable_clock();
     let client = portal_client(&fake, "test-password", clock);
@@ -208,6 +285,7 @@ async fn server_errors_are_unavailable_and_never_echo_the_password() {
         panic!("expected Unavailable");
     };
     assert!(!text.contains("test-password"));
+    assert_eq!(client.login_backoff_until(), None);
 }
 
 #[tokio::test]
