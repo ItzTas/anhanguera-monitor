@@ -85,6 +85,7 @@ const LAST_ISSUED_SEQ: &str = "SELECT GREATEST(
     (SELECT CASE WHEN is_called THEN last_value ELSE 0 END FROM events_seq_seq),
     (SELECT COALESCE(max(seq), 0) FROM events)
 )";
+const NEWEST_SEQ: &str = "SELECT COALESCE(max(seq), 0) FROM events";
 const PRUNE_EVENTS: &str = "DELETE FROM events
 WHERE seq <= (SELECT acked_seq FROM monitor_state)
   AND seq NOT IN (SELECT seq FROM events ORDER BY seq DESC LIMIT $1)";
@@ -438,6 +439,11 @@ impl Store {
 
     pub async fn last_issued_seq(&self) -> Result<i64, StoreError> {
         let row = self.client().await?.query_one(LAST_ISSUED_SEQ, &[]).await?;
+        Ok(row.try_get(0)?)
+    }
+
+    pub async fn newest_seq(&self) -> Result<i64, StoreError> {
+        let row = self.client().await?.query_one(NEWEST_SEQ, &[]).await?;
         Ok(row.try_get(0)?)
     }
 

@@ -393,6 +393,14 @@ async fn the_end_of_the_first_read_signals_the_events_it_held() {
         return;
     };
     let (scheduler, plugin, all) = scheduled_after_three_events(&db.url).await;
+    add_event(&db.url, "event-late").await;
+    let issued = scheduler
+        .monitor()
+        .store()
+        .last_issued_seq()
+        .await
+        .expect("last issued seq");
+    assert_eq!(issued, all[3] + 1);
     let mut signals = scheduler.monitor().notifier().subscribe();
     signals.latest_seq();
 

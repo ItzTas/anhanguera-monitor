@@ -83,12 +83,24 @@ impl<P: Portal> AnhangueraPlugin<P> {
         self.notifier().status_changed();
     }
 
-    fn end_first_read(&self, last_issued: i64) {
+    async fn end_first_read(&self, last_issued: i64) {
         let was_over = self.first_read_over.swap(true, Ordering::Relaxed);
         if was_over || self.first_read_boundary.is_none() {
             return;
         }
-        self.notifier().notify(last_issued);
+        let newest = self.newest_event(last_issued).await;
+        self.notifier().notify(newest);
+    }
+
+    async fn newest_event(&self, fallback: i64) -> i64 {
+        let read = self.scheduler.monitor().store().newest_seq().await;
+        read.unwrap_or_else(|failure| {
+            warn!(
+                error = &failure as &dyn Error,
+                "could not read the newest event; signalling the last issued seq"
+            );
+            fallback
+        })
     }
 
     fn notifier(&self) -> &Notifier {
@@ -177,7 +189,7 @@ impl<P: Portal> Plugin for AnhangueraPlugin<P> {
         let limit = effective_limit(limit);
         let (events, last_issued) = self.read_events(after, limit).await.map_err(unavailable)?;
         if (events.len() as i64) < limit {
-            self.end_first_read(last_issued);
+            self.end_first_read(last_issued).await;
         }
         Ok(Response::new(EventsResponse { events }))
     }

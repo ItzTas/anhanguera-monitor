@@ -349,3 +349,25 @@ async fn prune_drops_only_old_sent_keys() {
     assert!(keys.contains("fresh"));
     assert!(!keys.contains("old"));
 }
+
+#[tokio::test]
+async fn newest_seq_ignores_a_burned_sequence_value() {
+    let Some(db) = support::migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    store
+        .record(&batch_of(vec![event("a")]))
+        .await
+        .expect("record");
+    store
+        .record(&batch_of(vec![event("a")]))
+        .await
+        .expect("record again");
+
+    let newest = store.newest_seq().await.expect("newest");
+    let stored = store.events_after(0, 100).await.expect("events");
+
+    assert_eq!(Some(newest), stored.last().map(|stored| stored.seq));
+    assert_eq!(store.last_issued_seq().await.expect("issued"), newest + 1);
+}
