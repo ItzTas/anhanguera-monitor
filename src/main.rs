@@ -4,7 +4,7 @@ use std::io::Write;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use anhanguera_monitor::config;
+use anhanguera_monitor::config::{self, Config};
 use monitor_hub_plugin::{NOT_LAUNCHED_BY_HUB, launched_by_hub, logging};
 use tokio::runtime::{Builder, Runtime};
 use tracing::error;
@@ -48,14 +48,21 @@ fn validate_settings() -> ExitCode {
 }
 
 fn run_plugin() -> ExitCode {
-    if let Err(err) = logging::init("info") {
+    let config = match Config::load() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(err) = logging::init(&config.log_level) {
         eprintln!("cannot start logging: {err}");
         return ExitCode::FAILURE;
     }
     let Some(runtime) = runtime() else {
         return ExitCode::FAILURE;
     };
-    let result = runtime.block_on(anhanguera_monitor::app::run());
+    let result = runtime.block_on(anhanguera_monitor::app::run(config));
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN_LIMIT);
     let Err(err) = result else {
         return ExitCode::SUCCESS;
