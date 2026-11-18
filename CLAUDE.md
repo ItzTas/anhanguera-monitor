@@ -201,12 +201,13 @@ Settled ones are `PAID`, `CANCELLED`, `REFUNDED`, `WROTE_OFF` and `OVERPAID`.
 - `invoice_open`: the first cycle that sees an unannounced invoice to pay. It is never gated by the
   reminder hour, and it covers the thresholds it makes redundant, so there is no second message
   that morning.
-- `payment_due`, `payment_overdue`, `billing_day_approaching`, `calendar_financial` and the
-  coursework digest wait for `REMINDER_HOUR` in `AVA_TIMEZONE`. Every other kind goes out as soon
-  as a cycle sees it. When several thresholds of one item are due together, only
-  the closest is sent and the others are marked done. If an invoice's due date changes, its
+- `payment_due`, `payment_overdue`, `billing_day_approaching`, `calendar_financial`, the
+  coursework digest and `invoice_closed` wait for `REMINDER_HOUR` in `AVA_TIMEZONE`. Every other
+  kind goes out as soon as a cycle sees it. When several thresholds of one item are due together,
+  only the closest is sent and the others are marked done. If an invoice's due date changes, its
   reminders restart from the new date.
-- `invoice_closed`: an invoice that was to pay is settled or gone. Its id is
+- `invoice_closed`: an invoice that was to pay is settled or gone. A boleto payment often clears
+  overnight, so the first cycle in reminder hours sends it and sets `closedAt`. Its id is
   `invoice-closed:<invoiceId>:<dueDate>:<closedAt>`.
 - `payment_attention`: `informationType` changed to something other than `PAYMENTS_ON_TIME` or
   `NONE`.
