@@ -12,6 +12,32 @@ use support::migrated_database;
 
 const OPEN_INVOICES: &str = include_str!("../testdata/ava/Invoices.open.json");
 
+fn collect_strings(value: &Value, into: &mut Vec<String>) {
+    match value {
+        Value::String(text) => into.push(text.clone()),
+        Value::Array(items) => items.iter().for_each(|item| collect_strings(item, into)),
+        Value::Object(map) => map.values().for_each(|item| collect_strings(item, into)),
+        _ => {}
+    }
+}
+
+fn fixture_strings() -> Vec<String> {
+    let folder = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/ava");
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(folder).expect("read the fixtures") {
+        let path = entry.expect("a fixture entry").path();
+        let text = std::fs::read_to_string(&path).expect("read a fixture");
+        let value: Value = serde_json::from_str(&text).expect("a JSON fixture");
+        collect_strings(&value, &mut found);
+    }
+    found
+        .into_iter()
+        .filter(|text| text.len() > 3)
+        .filter(|text| !text.starts_with(|c: char| c.is_ascii_digit()))
+        .filter(|text| !text.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+        .collect()
+}
+
 async fn probe(env: Vec<(&'static str, String)>) -> Output {
     tokio::task::spawn_blocking(move || {
         Command::new(env!("CARGO_BIN_EXE_anhanguera-monitor"))
@@ -63,6 +89,9 @@ async fn probe_prints_shapes_with_prefixed_variables() {
     for secret in ["12345678909", "test-password", db.url.as_str()] {
         assert!(!stdout.contains(secret), "stdout leaked a secret");
         assert!(!stderr.contains(secret), "stderr leaked a secret");
+    }
+    for hidden in fixture_strings() {
+        assert!(!stdout.contains(&hidden), "stdout leaked a fixture value");
     }
     let document: Value = serde_json::from_str(&stdout).expect("stdout is one JSON document");
     let operations = document["operations"].as_object().expect("operations");

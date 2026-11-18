@@ -57,10 +57,11 @@ fn shape_under(value: &Value, key: Option<&str>) -> Value {
 }
 
 fn text_shape(text: &str, key: Option<&str>) -> String {
-    if DATE_PREFIXES
+    let date_like = DATE_PREFIXES
         .iter()
         .any(|pattern| starts_like(text, pattern))
-    {
+        && text.chars().all(is_date_char);
+    if date_like {
         return text
             .chars()
             .map(|c| if c.is_ascii_digit() { '9' } else { c })
@@ -70,6 +71,10 @@ fn text_shape(text: &str, key: Option<&str>) -> String {
         return text.to_owned();
     }
     "string".to_owned()
+}
+
+fn is_date_char(c: char) -> bool {
+    c.is_ascii_digit() || "-/:.+TZ ".contains(c)
 }
 
 fn starts_like(text: &str, pattern: &str) -> bool {
@@ -460,5 +465,31 @@ mod tests {
         assert_eq!(shaped["flag"], "boolean");
         assert_eq!(shaped["nothing"], Value::Null);
         assert_eq!(shaped["empty"], json!([]));
+    }
+
+    #[test]
+    fn shape_masks_whole_dates_and_periods() {
+        let shaped = shape(&json!({
+            "a": "2026-12-10T02:59:59Z",
+            "b": "2026-12-09T23:59:59-03:00",
+            "c": "2026-12-10T12:00:00.000Z",
+            "periodDates": "03/11/2026 - 12/12/2026",
+        }));
+        assert_eq!(shaped["a"], "9999-99-99T99:99:99Z");
+        assert_eq!(shaped["b"], "9999-99-99T99:99:99-99:99");
+        assert_eq!(shaped["c"], "9999-99-99T99:99:99.999Z");
+        assert_eq!(shaped["periodDates"], "99/99/9999 - 99/99/9999");
+    }
+
+    #[test]
+    fn shape_hides_text_that_only_starts_with_a_date() {
+        let shaped = shape(&json!({
+            "a": "10/12/2026 Prova de Joao",
+            "b": "2026-12-10abc-secret",
+            "c": "2026-12-10 Joao Silva",
+        }));
+        assert_eq!(shaped["a"], "string");
+        assert_eq!(shaped["b"], "string");
+        assert_eq!(shaped["c"], "string");
     }
 }
