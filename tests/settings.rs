@@ -38,3 +38,19 @@ fn validate_settings_accepts_a_valid_environment() {
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(answer(&output), serde_json::json!({"problems": []}));
 }
+
+#[test]
+fn validate_settings_reports_conversion_and_other_problems_together() {
+    let output = run(&[("REMINDER_HOUR", "x")]);
+
+    assert_eq!(output.status.code(), Some(1));
+    let problems = answer(&output)["problems"].clone();
+    let paths: Vec<&str> = problems
+        .as_array()
+        .expect("a list")
+        .iter()
+        .filter_map(|p| p["path"].as_str())
+        .collect();
+    assert!(paths.contains(&"reminder_hour"), "{paths:?}");
+    assert!(paths.contains(&"courses"), "{paths:?}");
+}

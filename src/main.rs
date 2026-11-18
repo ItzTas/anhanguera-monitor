@@ -24,10 +24,14 @@ fn main() -> ExitCode {
 }
 
 fn validate_settings() -> ExitCode {
-    let problems = match config::document_from_env(&|name| std::env::var(name).ok()) {
-        Ok(document) => config::validate(&document),
-        Err(problems) => problems,
-    };
+    let (document, mut problems) =
+        config::partial_document_from_env(&|name| std::env::var(name).ok());
+    let known: Vec<String> = problems.iter().map(|p| p.path.clone()).collect();
+    problems.extend(
+        config::validate(&document)
+            .into_iter()
+            .filter(|p| !known.contains(&p.path)),
+    );
     let answer = serde_json::json!({
         "problems": problems
             .iter()

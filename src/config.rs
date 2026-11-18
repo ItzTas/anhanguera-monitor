@@ -138,6 +138,16 @@ pub fn validate(document: &Value) -> Vec<PathProblem> {
 pub fn document_from_env(
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Value, Vec<PathProblem>> {
+    let (document, problems) = partial_document_from_env(lookup);
+    if problems.is_empty() {
+        return Ok(document);
+    }
+    Err(problems)
+}
+
+pub fn partial_document_from_env(
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> (Value, Vec<PathProblem>) {
     let mut document = Map::new();
     let mut problems = Vec::new();
     for field in declared_fields() {
@@ -167,10 +177,7 @@ pub fn document_from_env(
             }
         }
     }
-    if problems.is_empty() {
-        return Ok(Value::Object(document));
-    }
-    Err(problems)
+    (Value::Object(document), problems)
 }
 
 struct BadText {
@@ -228,6 +235,10 @@ fn build(
     document: &Value,
     read_file: &dyn Fn(&str) -> io::Result<String>,
 ) -> Result<Config, Vec<PathProblem>> {
+    let type_problems = type_problems(document);
+    if !type_problems.is_empty() {
+        return Err(type_problems);
+    }
     let raw: RawConfig = serde_json::from_value(document.clone())
         .map_err(|err| vec![PathProblem::new("", err.to_string())])?;
     let mut problems = Vec::new();
@@ -343,6 +354,46 @@ fn build(
         log_level,
         graphql_url,
     })
+}
+
+fn type_problems(document: &Value) -> Vec<PathProblem> {
+    declared_fields()
+        .iter()
+        .filter_map(|field| {
+            let name = text_of(field, "name");
+            let value = document.get(&name).filter(|v| !v.is_null())?;
+            let kind = declared_kind(field);
+            if has_kind(&kind, value) {
+                return None;
+            }
+            Some(PathProblem::new(&name, format!("must be {kind}")))
+        })
+        .collect()
+}
+
+fn declared_kind(field: &Value) -> String {
+    let kind = text_of(field, "type");
+    if kind != "list" {
+        return kind;
+    }
+    let item = field
+        .get("items")
+        .map(|i| text_of(i, "type"))
+        .unwrap_or_default();
+    format!("list of {item}")
+}
+
+fn has_kind(kind: &str, value: &Value) -> bool {
+    if let Some(item) = kind.strip_prefix("list of ") {
+        return value
+            .as_array()
+            .is_some_and(|items| items.iter().all(|i| has_kind(item, i)));
+    }
+    match kind {
+        "integer" => value.is_i64(),
+        "boolean" => value.is_boolean(),
+        _ => value.is_string(),
+    }
 }
 
 fn required<T>(path: &str, value: Option<T>, problems: &mut Vec<PathProblem>) -> Option<T> {
@@ -771,6 +822,39 @@ mod tests {
         exclusive.remove("database_url_file");
         exclusive.remove("ava_password_file");
         assert!(Config::from_document(&Value::Object(exclusive), &|_| Ok(String::new())).is_ok());
+    }
+
+    #[test]
+    fn a_wrong_typed_field_is_reported_by_path_without_its_value() {
+        let cases = [
+            ("ava_password", serde_json::json!(5)),
+            ("database_url", serde_json::json!(["leaky-secret"])),
+            ("ava_username", serde_json::json!(true)),
+            ("reminder_hour", serde_json::json!("leaky-secret")),
+        ];
+        for (name, value) in cases {
+            let mut document = full_document();
+            document.remove("database_url_file");
+            document.remove("ava_password_file");
+            document.insert(name.to_owned(), value);
+
+            let problems = validate(&Value::Object(document));
+
+            assert_eq!(paths(&problems), vec![name]);
+            assert!(!problems[0].message.contains("leaky-secret"));
+            assert!(!problems[0].message.contains('5'));
+        }
+    }
+
+    #[test]
+    fn a_conversion_problem_does_not_hide_the_other_problems() {
+        let (document, mut problems) =
+            partial_document_from_env(&|n| (n == "REMINDER_HOUR").then(|| "x".to_owned()));
+        problems.extend(validate(&document));
+
+        let found = paths(&problems);
+        assert!(found.contains(&"reminder_hour"));
+        assert!(found.contains(&"courses"));
     }
 
     #[test]
