@@ -1,0 +1,9 @@
+mutation LoginStudent($username: String!, $password: String!, $deviceId: String!) {
+  data: sofiaLoginUser(username: $username, password: $password, deviceId: $deviceId) {
+    accessToken
+    tokenType
+    expiresIn
+    scope
+    deviceWhiteListed
+  }
+}

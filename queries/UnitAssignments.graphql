@@ -1,0 +1,28 @@
+query UnitAssignments($subjectEnrollmentId: ID!) {
+  data: findLearningUnitEnrollments(subjectEnrollmentId: $subjectEnrollmentId) {
+    id
+    title
+    order
+    status
+    startDate
+    endDate
+    assignments {
+      grade
+      maxGrade
+      detail {
+        assignmentId: id
+        dueDate
+        startDate
+        config {
+          name
+          type
+          numberOfAttempts
+        }
+        attempts {
+          assignmentAttempId: id
+          attemptDate
+        }
+      }
+    }
+  }
+}

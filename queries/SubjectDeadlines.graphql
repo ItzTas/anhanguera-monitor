@@ -1,0 +1,40 @@
+query SubjectDeadlines($courseEnrollmentId: ID!) {
+  data: getCourseEnrollment(courseEnrollmentId: $courseEnrollmentId) {
+    id
+    subjectEnrollments: subjects(full: true) {
+      id
+      status
+      subject {
+        name
+      }
+      progress {
+        details {
+          type
+          completed
+          quantity
+        }
+      }
+      assignments {
+        id
+        status
+        detail {
+          id
+          startDate
+          dueDate
+          display {
+            name
+            periodTitle
+            periodDates
+          }
+          config {
+            name
+            type
+          }
+          attempts {
+            id
+          }
+        }
+      }
+    }
+  }
+}

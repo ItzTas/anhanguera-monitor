@@ -1,0 +1,5 @@
+query BoletoPdf($courseEnrollmentId: String!, $invoiceId: String!) {
+  data: getInvoiceBoletoPdf(courseEnrollmentId: $courseEnrollmentId, invoiceId: $invoiceId) {
+    url
+  }
+}

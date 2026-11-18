@@ -1,0 +1,32 @@
+query Invoices($courseEnrollmentId: String!) {
+  getInvoiceHomeModel(courseEnrollmentId: $courseEnrollmentId) {
+    informationType
+    billingDay
+    invoiceSections {
+      title
+      invoices {
+        id
+        status
+        title
+        shortTitle
+        formattedAmount
+        currentDueDate
+        block {
+          type
+          reason
+        }
+        details {
+          paymentAlert {
+            type
+            message
+          }
+          invoiceAlert {
+            type
+            message
+          }
+        }
+        hasExternalPayment
+      }
+    }
+  }
+}

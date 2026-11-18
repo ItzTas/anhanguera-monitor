@@ -1,0 +1,17 @@
+query Calendar($courseEnrollmentId: ID!, $date: String, $eventCategories: [CalendarEventCategory]) {
+  data: getEnrollmentCalendarV2(
+    courseEnrollmentId: $courseEnrollmentId
+    date: $date
+    eventCategories: $eventCategories
+  ) {
+    eventId
+    category
+    subCategory
+    title
+    description
+    eventDate
+    startDate
+    endDate
+    isCanceled
+  }
+}

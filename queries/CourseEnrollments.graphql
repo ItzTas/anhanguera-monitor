@@ -1,0 +1,9 @@
+query CourseEnrollments($studentId: ID!) {
+  data: findStudentCourseEnrollments(studentId: $studentId) {
+    id
+    status
+    course {
+      name
+    }
+  }
+}

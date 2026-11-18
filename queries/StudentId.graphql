@@ -1,0 +1,5 @@
+query StudentId {
+  data: sofiaGetMe {
+    id
+  }
+}

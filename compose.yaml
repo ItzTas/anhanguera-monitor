@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    cpus: "0.5"
+    mem_limit: 256m
+    container_name: anhanguera-monitor-dev-postgres
+    user: "70:70"
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_DB: anhanguera_monitor
+      POSTGRES_USER: anhanguera_monitor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - anhanguera-dev-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anhanguera_monitor -d anhanguera_monitor"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  anhanguera-dev-postgres:
