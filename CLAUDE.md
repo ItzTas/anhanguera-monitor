@@ -201,8 +201,9 @@ Settled ones are `PAID`, `CANCELLED`, `REFUNDED`, `WROTE_OFF` and `OVERPAID`.
 - `invoice_open`: the first cycle that sees an unannounced invoice to pay. It is never gated by the
   reminder hour, and it covers the thresholds it makes redundant, so there is no second message
   that morning.
-- `payment_due`, `billing_day_approaching`, `payment_overdue` and the coursework reminders wait for
-  `REMINDER_HOUR` in `AVA_TIMEZONE`. When several thresholds of one item are due together, only
+- `payment_due`, `payment_overdue`, `billing_day_approaching`, `calendar_financial` and the
+  coursework digest wait for `REMINDER_HOUR` in `AVA_TIMEZONE`. Every other kind goes out as soon
+  as a cycle sees it. When several thresholds of one item are due together, only
   the closest is sent and the others are marked done. If an invoice's due date changes, its
   reminders restart from the new date.
 - `invoice_closed`: an invoice that was to pay is settled or gone. Its id is

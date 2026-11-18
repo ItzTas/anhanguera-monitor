@@ -21,8 +21,11 @@ the portal.
 - **It says so when it cannot see.** If the portal changes in a way the monitor cannot read, if the login
   stops working, or if payments cannot be checked for a day, it sends an urgent event saying so.
 
-Reminders wait for a configured hour (9 by default, in the portal's time zone), so nothing arrives
-at 3 a.m. Two things go out at once: a new invoice, and the alerts about the monitor itself.
+Scheduled reminders wait for a configured hour (9 by default, in the portal's time zone), so
+nothing arrives at 3 a.m. These are `payment_due`, `payment_overdue`, `billing_day_approaching`,
+`calendar_financial` and the coursework digest. Everything else goes out as soon as a cycle sees
+it: `invoice_open`, `invoice_closed`, `payment_attention`, `site_changed`, `monitor_blind`,
+`login_failed`, `course_not_found` and `welcome`.
 
 ## Configuration
 
