@@ -1,3 +1,5 @@
+pub mod fake_ava;
+
 use anhanguera_monitor::store::MIGRATIONS;
 use monitor_hub_plugin::migrate::up;
 use monitor_hub_plugin_testkit::{Database, database};
