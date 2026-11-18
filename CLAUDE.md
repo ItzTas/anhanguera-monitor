@@ -238,7 +238,8 @@ Settled ones are `PAID`, `CANCELLED`, `REFUNDED`, `WROTE_OFF` and `OVERPAID`.
   that already exists.** The SDK's `migrate::up` applies them on the writer lock's connection.
 - Tables: `monitor_state` (one row: device id, acknowledged `seq`, last payments success, the
   payments failure streak start, whether `monitor_blind` went out), `events` (`seq` from a
-  `BIGSERIAL`, a unique `id`), `sent_keys`, `invoices` (due date, status, first seen, learned lead
+  `BIGSERIAL`, a unique `id`), `sent_keys`, `invoices` (one row per enrollment and invoice id, so
+  an invoice listed under two enrollments keeps two rows: due date, status, first seen, learned lead
   days, overdue repeat bookkeeping), `enrollments` (last `informationType`, last payments check) and
   `problems` (open `site_changed` signatures). The password and the token are never stored.
 - All SQL lives in `src/store.rs`. Every transaction that inserts an event locks the state row
