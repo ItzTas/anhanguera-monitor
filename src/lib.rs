@@ -4,6 +4,7 @@ pub mod config;
 pub mod coursework;
 pub mod dates;
 pub mod events;
+pub mod monitor;
 pub mod payments;
 pub mod portal;
 pub mod reminders;
