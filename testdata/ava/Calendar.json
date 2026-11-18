@@ -1,0 +1,48 @@
+{
+  "data": [
+    {
+      "eventId": "event-1",
+      "category": "ACADEMIC_DATES",
+      "subCategory": "ASSIGNMENT",
+      "title": "EXAMPLE SUBJECT ONE",
+      "description": "Trabalho",
+      "eventDate": "2026-11-30",
+      "startDate": "2026-11-02",
+      "endDate": "2026-11-30",
+      "isCanceled": false
+    },
+    {
+      "eventId": "event-2",
+      "category": "ACADEMIC_DATES",
+      "subCategory": "EXAM_PERIOD",
+      "title": "EXAMPLE SUBJECT ONE",
+      "description": "Primeira chamada",
+      "eventDate": "2026-12-15",
+      "startDate": "2026-12-01",
+      "endDate": "2026-12-15",
+      "isCanceled": false
+    },
+    {
+      "eventId": "event-3",
+      "category": "ACADEMIC_DATES",
+      "subCategory": "STUDY_PERIOD",
+      "title": "EXAMPLE SUBJECT ONE",
+      "description": "Período de estudo",
+      "eventDate": "2026-12-10",
+      "startDate": "2026-08-03",
+      "endDate": "2026-12-10",
+      "isCanceled": false
+    },
+    {
+      "eventId": "event-4",
+      "category": "ACADEMIC_DATES",
+      "subCategory": "ACADEMIC_HOLIDAYS",
+      "title": "Férias Letivas",
+      "description": "Férias Letivas",
+      "eventDate": "2027-01-04",
+      "startDate": "2027-01-04",
+      "endDate": "2027-01-31",
+      "isCanceled": false
+    }
+  ]
+}

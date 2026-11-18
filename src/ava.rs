@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use chrono_tz::Tz;
 use reqwest::{Certificate, StatusCode};
 use serde_json::{Value, json};
 
@@ -92,6 +93,7 @@ pub struct AvaClient {
     credentials: Credentials,
     device_id: String,
     clock: Clock,
+    tz: Tz,
     session: tokio::sync::Mutex<Option<Token>>,
     rejected_at: Mutex<Option<DateTime<Utc>>>,
 }
@@ -102,6 +104,7 @@ impl AvaClient {
         credentials: Credentials,
         device_id: String,
         clock: Clock,
+        tz: Tz,
     ) -> Result<AvaClient, AvaError> {
         let roots = webpki_root_certs::TLS_SERVER_ROOT_CERTS
             .iter()
@@ -122,9 +125,14 @@ impl AvaClient {
             credentials,
             device_id,
             clock,
+            tz,
             session: tokio::sync::Mutex::new(None),
             rejected_at: Mutex::new(None),
         })
+    }
+
+    pub fn tz(&self) -> Tz {
+        self.tz
     }
 
     pub fn login_backoff_until(&self) -> Option<DateTime<Utc>> {

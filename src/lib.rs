@@ -2,6 +2,7 @@ pub mod app;
 pub mod ava;
 pub mod config;
 pub mod dates;
+pub mod portal;
 pub mod secret;
 pub mod store;
 pub mod text;

@@ -1,0 +1,29 @@
+{
+  "data": {
+    "getInvoiceHomeModel": {
+      "informationType": "PAYMENTS_ON_TIME",
+      "billingDay": "10",
+      "invoiceSections": [
+        {
+          "title": "Mensalidades",
+          "invoices": [
+            {
+              "id": "invoice-1",
+              "status": "OPEN",
+              "title": "Mensalidade 12/2026",
+              "shortTitle": "Dezembro",
+              "formattedAmount": "R$ 123,45",
+              "currentDueDate": "2026-12-10",
+              "block": null,
+              "details": {
+                "paymentAlert": { "type": "WARNING", "message": "Pague até o vencimento" },
+                "invoiceAlert": null
+              },
+              "hasExternalPayment": false
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

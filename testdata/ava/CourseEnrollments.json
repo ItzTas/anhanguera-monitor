@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "id": "KRT-00000000-0000-0000-0000-000000000001",
+      "status": "ATTENDING",
+      "course": { "name": "Análise e Desenvolvimento de Sistemas" }
+    },
+    {
+      "id": "KRT-00000000-0000-0000-0000-000000000002",
+      "status": "ATTENDING",
+      "course": { "name": "Example Other Course" }
+    }
+  ]
+}

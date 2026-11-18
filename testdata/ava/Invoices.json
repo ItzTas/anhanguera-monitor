@@ -1,0 +1,9 @@
+{
+  "data": {
+    "getInvoiceHomeModel": {
+      "informationType": "PAYMENTS_ON_TIME",
+      "billingDay": "10",
+      "invoiceSections": []
+    }
+  }
+}

@@ -4,9 +4,11 @@ use std::sync::{Arc, Mutex};
 
 use anhanguera_monitor::ava::model::{Problem, ProblemKind};
 use anhanguera_monitor::ava::{AvaClient, AvaError, Credentials, Operation};
+use anhanguera_monitor::portal::Portal;
 use anhanguera_monitor::secret::Secret;
 use anhanguera_monitor::timestamp::Clock;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
+use chrono_tz::America::Sao_Paulo;
 use serde_json::{Value, json};
 use support::fake_ava::FakeAva;
 
@@ -33,7 +35,14 @@ fn portal_client(fake: &FakeAva, password: &str, clock: Clock) -> AvaClient {
         username: Secret::new("12345678909".to_owned()),
         password: Secret::new(password.to_owned()),
     };
-    AvaClient::new(fake.url(), credentials, "device-1".to_owned(), clock).expect("client")
+    AvaClient::new(
+        fake.url(),
+        credentials,
+        "device-1".to_owned(),
+        clock,
+        Sao_Paulo,
+    )
+    .expect("client")
 }
 
 fn count(fake: &FakeAva, operation: &str) -> usize {
@@ -199,4 +208,76 @@ async fn server_errors_are_unavailable_and_never_echo_the_password() {
         panic!("expected Unavailable");
     };
     assert!(!text.contains("test-password"));
+}
+
+#[tokio::test]
+async fn portal_methods_decode_fake_answers() {
+    let fake = FakeAva::start().await;
+    let (clock, _) = movable_clock();
+    let client = portal_client(&fake, "test-password", clock);
+    let today = NaiveDate::from_ymd_opt(2026, 11, 5).expect("date");
+
+    assert_eq!(client.student_id().await.expect("student"), "900000001");
+    let courses = client
+        .course_enrollments("900000001")
+        .await
+        .expect("courses");
+    assert_eq!(courses.len(), 2);
+    let course = &courses[0].id;
+    assert!(
+        client
+            .invoices(course)
+            .await
+            .expect("invoices")
+            .invoices
+            .is_empty()
+    );
+    assert!(
+        client
+            .boleto_url(course, "invoice-1")
+            .await
+            .expect("boleto")
+            .ends_with(".pdf")
+    );
+    let subjects = client.subjects(course).await.expect("subjects");
+    assert_eq!(subjects.len(), 3);
+    assert_eq!(client.quizzes("subject-1").await.expect("quizzes").len(), 2);
+    assert_eq!(
+        client
+            .calendar(course, today)
+            .await
+            .expect("calendar")
+            .len(),
+        4
+    );
+    assert_eq!(client.login_backoff_until(), None);
+
+    let requests = fake.requests();
+    let calendar = requests
+        .iter()
+        .find(|request| request.operation == "Calendar")
+        .expect("calendar request");
+    assert_eq!(calendar.variables["date"], "2026-11-05");
+    assert_eq!(
+        calendar.variables["eventCategories"],
+        json!([
+            "ACADEMIC_DATES",
+            "UNIQUE_EVENTS",
+            "SECRETARIAT",
+            "FINANCIAL",
+            "HOLIDAYS"
+        ])
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_answer_becomes_a_schema_error() {
+    let fake = FakeAva::start().await;
+    let (clock, _) = movable_clock();
+    let client = portal_client(&fake, "test-password", clock);
+    fake.set("StudentId", 200, json!({"data": {}}));
+
+    let error = client.student_id().await.expect_err("error");
+
+    assert!(matches!(error, AvaError::Schema(problem) if problem.field == "id"));
 }
