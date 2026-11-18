@@ -387,14 +387,13 @@ fn decode_invoice(entry: &Value, tz: Tz) -> Decoded<Invoice> {
             ProblemKind::UnknownValue(owned(raw_status)),
         )
     })?;
-    let short_title = entry
-        .get("shortTitle")
-        .and_then(Value::as_str)
-        .filter(|title| !title.is_empty());
-    let title = match short_title {
-        Some(title) => title,
-        None => required_str(OPERATION, entry, PATH, "title")?,
+    let text = |key: &str| {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
     };
+    let title = text("shortTitle").or_else(|| text("title"));
     let alerts = ["paymentAlert", "invoiceAlert"]
         .iter()
         .filter_map(|key| entry.get("details")?.get(*key)?.get("message")?.as_str())
@@ -404,8 +403,8 @@ fn decode_invoice(entry: &Value, tz: Tz) -> Decoded<Invoice> {
     Ok(Invoice {
         id: owned(required_str(OPERATION, entry, PATH, "id")?),
         status,
-        title: owned(title),
-        amount: owned(required_str(OPERATION, entry, PATH, "formattedAmount")?),
+        title: owned(title.unwrap_or_default()),
+        amount: owned(text("formattedAmount").unwrap_or_default()),
         due_date: required_date(OPERATION, entry, PATH, "currentDueDate", tz)?,
         alerts,
     })
@@ -669,12 +668,32 @@ mod tests {
     }
 
     #[test]
-    fn empty_short_title_falls_back_to_title() {
-        let body = invoices_body(invoice(json!({})));
+    fn invoice_title_and_amount_fall_back_to_empty_text() {
+        let cases = [
+            (json!({}), "Mensalidade", "R$ 1,00"),
+            (json!({"shortTitle": "Dez"}), "Dez", "R$ 1,00"),
+            (json!({"shortTitle": null, "title": null}), "", "R$ 1,00"),
+            (json!({"formattedAmount": null}), "Mensalidade", ""),
+        ];
+        for (overrides, title, amount) in cases {
+            let body = invoices_body(invoice(overrides.clone()));
 
-        let home = decode_invoices(&body, Sao_Paulo).expect("home");
+            let home = decode_invoices(&body, Sao_Paulo).expect("home");
 
-        assert_eq!(home.invoices[0].title, "Mensalidade");
+            let decoded = &home.invoices[0];
+            assert_eq!(decoded.title, title, "{overrides}");
+            assert_eq!(decoded.amount, amount, "{overrides}");
+            assert_eq!(decoded.due_date, date(2026, 12, 10), "{overrides}");
+        }
+
+        let mut bare = invoice(json!({}));
+        for key in ["shortTitle", "title", "formattedAmount"] {
+            bare.as_object_mut().expect("object").remove(key);
+        }
+        let home = decode_invoices(&invoices_body(bare), Sao_Paulo).expect("home");
+        assert_eq!(home.invoices[0].id, "invoice-1");
+        assert_eq!(home.invoices[0].title, "");
+        assert_eq!(home.invoices[0].amount, "");
     }
 
     #[test]

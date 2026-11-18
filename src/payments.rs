@@ -439,11 +439,12 @@ fn due_title(date: NaiveDate) -> String {
 
 fn invoice_body(ctx: &Context, invoice: &Invoice) -> String {
     let due = invoice.due_date;
-    let heading = format!(
-        "{} — {}",
-        one_line(&invoice.title, SITE_TEXT_MAX),
-        one_line(&invoice.amount, SITE_TEXT_MAX)
-    );
+    let heading = [&invoice.title, &invoice.amount]
+        .into_iter()
+        .map(|text| one_line(text, SITE_TEXT_MAX))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join(" — ");
     let when = format!(
         "Due {} ({})",
         format_day(due),
@@ -455,6 +456,7 @@ fn invoice_body(ctx: &Context, invoice: &Invoice) -> String {
         .map(|alert| one_line(alert, SITE_TEXT_MAX));
     [heading, when]
         .into_iter()
+        .filter(|line| !line.is_empty())
         .chain(alerts)
         .collect::<Vec<_>>()
         .join("\n")
@@ -700,6 +702,25 @@ mod tests {
                 "x".repeat(299)
             )
         );
+    }
+
+    #[test]
+    fn invoice_text_leaves_out_a_missing_title_or_amount() {
+        let cases = [
+            ("Dezembro", "", "Dezembro\nDue 10 Dec 2026 (in 20 days)"),
+            ("", "R$ 123,45", "R$ 123,45\nDue 10 Dec 2026 (in 20 days)"),
+            ("", "", "Due 10 Dec 2026 (in 20 days)"),
+        ];
+        for (title, amount, body) in cases {
+            let mut home = open("2026-12-10");
+            home.invoices[0].title = title.to_owned();
+            home.invoices[0].amount = amount.to_owned();
+
+            let events = World::new().cycle(&home, "2026-11-20T15:00:00Z");
+
+            assert_eq!(ids(&events), ["invoice-open:inv-1"]);
+            assert_eq!(events[0].event.body, body, "{title:?} {amount:?}");
+        }
     }
 
     #[test]
