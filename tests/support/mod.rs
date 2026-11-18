@@ -1,5 +1,6 @@
 pub mod fake_ava;
 pub mod fake_portal;
+pub mod process;
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
