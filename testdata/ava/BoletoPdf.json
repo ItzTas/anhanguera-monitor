@@ -1,5 +1,7 @@
 {
   "data": {
-    "url": "https://boleto.example.test/invoice-1.pdf"
+    "data": {
+      "url": "https://boleto.example.test/invoice-1.pdf"
+    }
   }
 }

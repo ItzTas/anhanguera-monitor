@@ -1,9 +1,11 @@
 {
   "data": {
-    "accessToken": "test-token",
-    "tokenType": "Bearer",
-    "expiresIn": 25200,
-    "scope": "read,write",
-    "deviceWhiteListed": true
+    "data": {
+      "accessToken": "test-token",
+      "tokenType": "Bearer",
+      "expiresIn": 25200,
+      "scope": "read,write",
+      "deviceWhiteListed": true
+    }
   }
 }

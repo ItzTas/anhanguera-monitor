@@ -218,7 +218,7 @@ impl AvaClient {
         if graphql_errors(&body).is_some() {
             return Err(self.reject());
         }
-        let login = &body["data"];
+        let login = &body["data"]["data"];
         let missing = |field: &str| {
             AvaError::Schema(Problem {
                 operation: Operation::LoginStudent.name(),

@@ -1,56 +1,75 @@
 {
-  "data": [
-    {
-      "id": "unit-1",
-      "title": "Unidade 1",
-      "order": 1,
-      "status": "PUBLISHED",
-      "startDate": "2026-08-03",
-      "endDate": "2026-12-31",
-      "assignments": [
-        {
-          "grade": 0,
-          "maxGrade": 10,
-          "detail": {
-            "assignmentId": "quiz-1",
-            "dueDate": "2026-12-20",
-            "startDate": "2026-08-03",
-            "config": { "name": "Exercício da Unidade 1", "type": "QUIZ", "numberOfAttempts": 3 },
-            "attempts": []
+  "data": {
+    "data": [
+      {
+        "id": "unit-1",
+        "title": "Unidade 1",
+        "order": 1,
+        "status": "PUBLISHED",
+        "startDate": "2026-08-03",
+        "endDate": "2026-12-31",
+        "assignments": [
+          {
+            "grade": 0,
+            "maxGrade": 10,
+            "detail": {
+              "assignmentId": "quiz-1",
+              "dueDate": "2026-12-20",
+              "startDate": "2026-08-03",
+              "config": {
+                "name": "Exercício da Unidade 1",
+                "type": "QUIZ",
+                "numberOfAttempts": 3
+              },
+              "attempts": []
+            }
+          },
+          {
+            "grade": 8,
+            "maxGrade": 10,
+            "detail": {
+              "assignmentId": "quiz-2",
+              "dueDate": "2026-12-20",
+              "startDate": "2026-08-03",
+              "config": {
+                "name": "Exercício da Unidade 2",
+                "type": "QUIZ",
+                "numberOfAttempts": 3
+              },
+              "attempts": [
+                {
+                  "assignmentAttempId": "quiz-attempt-1",
+                  "attemptDate": "2026-09-10T14:30:00Z"
+                }
+              ]
+            }
+          },
+          {
+            "grade": 0,
+            "maxGrade": 0,
+            "detail": {
+              "assignmentId": "attendance-1",
+              "dueDate": "2026-12-20",
+              "startDate": "2026-08-03",
+              "config": {
+                "name": "Progresso em Aula",
+                "type": "ATTENDANCE",
+                "numberOfAttempts": null
+              },
+              "attempts": []
+            }
           }
-        },
-        {
-          "grade": 8,
-          "maxGrade": 10,
-          "detail": {
-            "assignmentId": "quiz-2",
-            "dueDate": "2026-12-20",
-            "startDate": "2026-08-03",
-            "config": { "name": "Exercício da Unidade 2", "type": "QUIZ", "numberOfAttempts": 3 },
-            "attempts": [{ "assignmentAttempId": "quiz-attempt-1", "attemptDate": "2026-09-10T14:30:00Z" }]
-          }
-        },
-        {
-          "grade": 0,
-          "maxGrade": 0,
-          "detail": {
-            "assignmentId": "attendance-1",
-            "dueDate": "2026-12-20",
-            "startDate": "2026-08-03",
-            "config": { "name": "Progresso em Aula", "type": "ATTENDANCE", "numberOfAttempts": null },
-            "attempts": []
-          }
-        }
-      ]
-    },
-    {
-      "id": "unit-2",
-      "title": "Unidade 2",
-      "order": 2,
-      "status": "PUBLISHED",
-      "startDate": "2026-09-01",
-      "endDate": "2026-12-31",
-      "assignments": []
-    }
-  ]
+        ]
+      },
+      {
+        "id": "unit-2",
+        "title": "Unidade 2",
+        "order": 2,
+        "status": "PUBLISHED",
+        "startDate": "2026-09-01",
+        "endDate": "2026-12-31",
+        "assignments": []
+      }
+    ]
+  }
 }

@@ -287,8 +287,16 @@ fn required_date(
     })
 }
 
+fn payload<'a>(operation: &'static str, body: &'a Value) -> Decoded<&'a Value> {
+    let data = required(operation, body, "", "data")?;
+    required(operation, data, "data", "data")
+}
+
 fn root_array<'a>(operation: &'static str, body: &'a Value) -> Decoded<&'a [Value]> {
-    required_array(operation, body, "", "data")
+    payload(operation, body)?
+        .as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| fail(operation, "data.data".to_owned(), ProblemKind::WrongType))
 }
 
 fn owned(value: &str) -> String {
@@ -297,7 +305,7 @@ fn owned(value: &str) -> String {
 
 pub fn decode_student_id(body: &Value, _tz: Tz) -> Decoded<String> {
     const OPERATION: &str = "StudentId";
-    let data = required(OPERATION, body, "", "data")?;
+    let data = payload(OPERATION, body)?;
     required_str(OPERATION, data, "", "id").map(owned)
 }
 
@@ -318,7 +326,7 @@ pub fn decode_course_enrollments(body: &Value, _tz: Tz) -> Decoded<Vec<CourseEnr
 
 pub fn decode_boleto_url(body: &Value, _tz: Tz) -> Decoded<String> {
     const OPERATION: &str = "BoletoPdf";
-    let data = required(OPERATION, body, "", "data")?;
+    let data = payload(OPERATION, body)?;
     required_str(OPERATION, data, "", "url").map(owned)
 }
 
@@ -405,7 +413,7 @@ fn decode_invoice(entry: &Value, tz: Tz) -> Decoded<Invoice> {
 
 pub fn decode_subjects(body: &Value, tz: Tz) -> Decoded<Vec<Subject>> {
     const OPERATION: &str = "SubjectDeadlines";
-    let data = required(OPERATION, body, "", "data")?;
+    let data = payload(OPERATION, body)?;
     let mut subjects = Vec::new();
     for entry in required_array(OPERATION, data, "", "subjectEnrollments")? {
         subjects.extend(decode_subject(entry, tz)?);
@@ -805,7 +813,8 @@ mod tests {
             decode_boleto_url(&boleto, Sao_Paulo).expect("url"),
             "https://boleto.example.test/invoice-1.pdf"
         );
-        let problem = decode_boleto_url(&json!({"data": {}}), Sao_Paulo).expect_err("problem");
+        let problem =
+            decode_boleto_url(&json!({"data": {"data": {}}}), Sao_Paulo).expect_err("problem");
         assert_eq!(problem.field, "url");
     }
 
@@ -842,7 +851,7 @@ mod tests {
     #[test]
     fn unknown_subject_status_is_skipped_not_a_problem() {
         let mut body = fixture(include_str!("../../testdata/ava/SubjectDeadlines.json"));
-        body["data"]["subjectEnrollments"][1]["status"] = json!("SOMETHING_NEW");
+        body["data"]["data"]["subjectEnrollments"][1]["status"] = json!("SOMETHING_NEW");
 
         let subjects = decode_subjects(&body, Sao_Paulo).expect("subjects");
 
@@ -853,8 +862,9 @@ mod tests {
     #[test]
     fn unknown_assessment_status_or_type_is_skipped() {
         let mut body = fixture(include_str!("../../testdata/ava/SubjectDeadlines.json"));
-        body["data"]["subjectEnrollments"][0]["assignments"][0]["status"] = json!("SOMETHING_NEW");
-        body["data"]["subjectEnrollments"][0]["assignments"][1]["detail"]["config"]["type"] =
+        body["data"]["data"]["subjectEnrollments"][0]["assignments"][0]["status"] =
+            json!("SOMETHING_NEW");
+        body["data"]["data"]["subjectEnrollments"][0]["assignments"][1]["detail"]["config"]["type"] =
             json!("SURVEY");
 
         let subjects = decode_subjects(&body, Sao_Paulo).expect("subjects");
@@ -866,7 +876,7 @@ mod tests {
     #[test]
     fn unparseable_period_dates_leave_period_end_empty() {
         let mut body = fixture(include_str!("../../testdata/ava/SubjectDeadlines.json"));
-        body["data"]["subjectEnrollments"][0]["assignments"][0]["detail"]["display"]["periodDates"] =
+        body["data"]["data"]["subjectEnrollments"][0]["assignments"][0]["detail"]["display"]["periodDates"] =
             json!("em breve");
 
         let subjects = decode_subjects(&body, Sao_Paulo).expect("subjects");
@@ -877,7 +887,7 @@ mod tests {
     #[test]
     fn unparseable_assessment_due_date_is_a_problem() {
         let mut body = fixture(include_str!("../../testdata/ava/SubjectDeadlines.json"));
-        body["data"]["subjectEnrollments"][0]["assignments"][0]["detail"]["dueDate"] =
+        body["data"]["data"]["subjectEnrollments"][0]["assignments"][0]["detail"]["dueDate"] =
             json!("soon");
 
         let problem = decode_subjects(&body, Sao_Paulo).expect_err("problem");
@@ -910,7 +920,7 @@ mod tests {
     #[test]
     fn calendar_skips_events_without_dates_and_keeps_canceled_flag() {
         let mut body = fixture(include_str!("../../testdata/ava/Calendar.json"));
-        let events = body["data"].as_array_mut().expect("array");
+        let events = body["data"]["data"].as_array_mut().expect("array");
         for key in ["eventDate", "startDate", "endDate"] {
             events[0][key] = Value::Null;
         }
@@ -930,10 +940,23 @@ mod tests {
 
     #[test]
     fn calendar_that_is_not_an_array_is_a_problem() {
-        let problem = decode_calendar(&json!({"data": {}}), Sao_Paulo).expect_err("problem");
+        let problem =
+            decode_calendar(&json!({"data": {"data": {}}}), Sao_Paulo).expect_err("problem");
 
         assert_eq!(problem.operation, "Calendar");
         assert_eq!(problem.kind, ProblemKind::WrongType);
+    }
+
+    #[test]
+    fn answers_without_the_aliased_level_are_problems() {
+        let flat = json!({"data": [{"id": "k", "status": "ATTENDING", "course": {"name": "n"}}]});
+
+        let problem = decode_course_enrollments(&flat, Sao_Paulo).expect_err("problem");
+
+        assert_eq!(problem.operation, "CourseEnrollments");
+        assert_eq!(problem.kind, ProblemKind::Missing);
+        let flat_calendar = decode_calendar(&json!({"data": []}), Sao_Paulo).expect_err("problem");
+        assert_eq!(flat_calendar.kind, ProblemKind::Missing);
     }
 
     #[test]

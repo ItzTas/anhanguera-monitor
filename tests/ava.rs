@@ -275,7 +275,7 @@ async fn a_malformed_answer_becomes_a_schema_error() {
     let fake = FakeAva::start().await;
     let (clock, _) = movable_clock();
     let client = portal_client(&fake, "test-password", clock);
-    fake.set("StudentId", 200, json!({"data": {}}));
+    fake.set("StudentId", 200, json!({"data": {"data": {}}}));
 
     let error = client.student_id().await.expect_err("error");
 

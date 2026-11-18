@@ -1,84 +1,125 @@
 {
   "data": {
-    "id": "KRT-00000000-0000-0000-0000-000000000001",
-    "subjectEnrollments": [
-      {
-        "id": "subject-1",
-        "status": "IN_PROGRESS",
-        "subject": { "name": "EXAMPLE SUBJECT ONE" },
-        "progress": {
-          "details": [
-            { "type": "ASSIGNMENT", "completed": 1, "quantity": 2 },
-            { "type": "EXAM", "completed": 0, "quantity": 1 },
-            { "type": "ATTENDANCE", "completed": null, "quantity": 20 },
-            { "type": "QUIZ", "completed": 1, "quantity": 4 }
+    "data": {
+      "id": "KRT-00000000-0000-0000-0000-000000000001",
+      "subjectEnrollments": [
+        {
+          "id": "subject-1",
+          "status": "IN_PROGRESS",
+          "subject": {
+            "name": "EXAMPLE SUBJECT ONE"
+          },
+          "progress": {
+            "details": [
+              {
+                "type": "ASSIGNMENT",
+                "completed": 1,
+                "quantity": 2
+              },
+              {
+                "type": "EXAM",
+                "completed": 0,
+                "quantity": 1
+              },
+              {
+                "type": "ATTENDANCE",
+                "completed": null,
+                "quantity": 20
+              },
+              {
+                "type": "QUIZ",
+                "completed": 1,
+                "quantity": 4
+              }
+            ]
+          },
+          "assignments": [
+            {
+              "id": "assignment-1",
+              "status": "AVAILABLE",
+              "detail": {
+                "id": "detail-1",
+                "startDate": "2026-11-02",
+                "dueDate": "2026-12-20",
+                "display": {
+                  "name": "Trabalho",
+                  "periodTitle": "Período de trabalho",
+                  "periodDates": "02/11/2026 - 30/11/2026"
+                },
+                "config": {
+                  "name": "Trabalho",
+                  "type": "ASSIGNMENT"
+                },
+                "attempts": []
+              }
+            },
+            {
+              "id": "assignment-2",
+              "status": "DONE",
+              "detail": {
+                "id": "detail-2",
+                "startDate": "2026-09-01",
+                "dueDate": "2026-10-20",
+                "display": {
+                  "name": "Trabalho",
+                  "periodTitle": "Período de trabalho",
+                  "periodDates": "01/09/2026 - 20/10/2026"
+                },
+                "config": {
+                  "name": "Trabalho",
+                  "type": "ASSIGNMENT"
+                },
+                "attempts": [
+                  {
+                    "id": "attempt-1"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "assignment-3",
+              "status": "NOT_AVAILABLE",
+              "detail": {
+                "id": "detail-3",
+                "startDate": "2026-12-01",
+                "dueDate": "2027-01-15",
+                "display": {
+                  "name": "Prova",
+                  "periodTitle": "Período de prova",
+                  "periodDates": "01/12/2026 - 15/01/2027"
+                },
+                "config": {
+                  "name": "Prova",
+                  "type": "EXAM"
+                },
+                "attempts": []
+              }
+            }
           ]
         },
-        "assignments": [
-          {
-            "id": "assignment-1",
-            "status": "AVAILABLE",
-            "detail": {
-              "id": "detail-1",
-              "startDate": "2026-11-02",
-              "dueDate": "2026-12-20",
-              "display": {
-                "name": "Trabalho",
-                "periodTitle": "Período de trabalho",
-                "periodDates": "02/11/2026 - 30/11/2026"
-              },
-              "config": { "name": "Trabalho", "type": "ASSIGNMENT" },
-              "attempts": []
-            }
+        {
+          "id": "subject-2",
+          "status": "PASSED",
+          "subject": {
+            "name": "EXAMPLE SUBJECT TWO"
           },
-          {
-            "id": "assignment-2",
-            "status": "DONE",
-            "detail": {
-              "id": "detail-2",
-              "startDate": "2026-09-01",
-              "dueDate": "2026-10-20",
-              "display": {
-                "name": "Trabalho",
-                "periodTitle": "Período de trabalho",
-                "periodDates": "01/09/2026 - 20/10/2026"
-              },
-              "config": { "name": "Trabalho", "type": "ASSIGNMENT" },
-              "attempts": [{ "id": "attempt-1" }]
-            }
+          "progress": {
+            "details": []
           },
-          {
-            "id": "assignment-3",
-            "status": "NOT_AVAILABLE",
-            "detail": {
-              "id": "detail-3",
-              "startDate": "2026-12-01",
-              "dueDate": "2027-01-15",
-              "display": {
-                "name": "Prova",
-                "periodTitle": "Período de prova",
-                "periodDates": "01/12/2026 - 15/01/2027"
-              },
-              "config": { "name": "Prova", "type": "EXAM" },
-              "attempts": []
-            }
-          }
-        ]
-      },
-      {
-        "id": "subject-2",
-        "status": "PASSED",
-        "subject": { "name": "EXAMPLE SUBJECT TWO" },
-        "progress": { "details": [] },
-        "assignments": []
-      },
-      {
-        "id": "subject-3",
-        "status": "FAILED",
-        "subject": { "name": "EXAMPLE SUBJECT THREE" },
-        "progress": { "details": [] },
-        "assignments": []
-      }
-    ]
+          "assignments": []
+        },
+        {
+          "id": "subject-3",
+          "status": "FAILED",
+          "subject": {
+            "name": "EXAMPLE SUBJECT THREE"
+          },
+          "progress": {
+            "details": []
+          },
+          "assignments": []
+        }
+      ]
+    }
   }
 }
