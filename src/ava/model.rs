@@ -589,7 +589,7 @@ fn decode_event(entry: &Value, tz: Tz) -> Option<CalendarEvent> {
         category: text("category")?,
         sub_category: text("subCategory")?,
         title: text("title")?,
-        description: text("description")?,
+        description: text("description").unwrap_or_default(),
         start,
         end,
         event_date,
@@ -936,6 +936,27 @@ mod tests {
         assert_eq!(decoded[0].end, Some(date(2026, 12, 10)));
         assert_eq!(decoded[0].event_date, Some(date(2026, 12, 10)));
         assert!(!decoded[1].canceled);
+    }
+
+    #[test]
+    fn calendar_keeps_events_without_a_description() {
+        let mut body = fixture(include_str!("../../testdata/ava/Calendar.json"));
+        let events = body["data"]["data"].as_array_mut().expect("array");
+        events[0]
+            .as_object_mut()
+            .expect("object")
+            .remove("description");
+        events[2]["description"] = Value::Null;
+
+        let decoded = decode_calendar(&body, Sao_Paulo).expect("events");
+
+        assert_eq!(decoded.len(), 4);
+        assert_eq!(decoded[0].id, "event-1");
+        assert_eq!(decoded[0].description, "");
+        assert_eq!(decoded[2].id, "event-3");
+        assert_eq!(decoded[2].sub_category, "STUDY_PERIOD");
+        assert_eq!(decoded[2].description, "");
+        assert_eq!(decoded[1].description, "Primeira chamada");
     }
 
     #[test]
