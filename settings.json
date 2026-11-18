@@ -23,7 +23,7 @@
     {"name": "boleto_link", "label": "Link to the boleto", "type": "boolean", "default": true, "env": "BOLETO_LINK",
      "help": "Include the payment slip link in payment notifications."},
     {"name": "billing_day_net", "label": "Billing day net", "type": "string", "default": "auto", "env": "BILLING_DAY_NET",
-     "help": "The day of the month the net billing is due: auto to read it from the portal, off to ignore it, or a day from 1 to 28."},
+     "help": "Days before the monthly due day to warn when the portal still shows no invoice. auto learns the number from past invoices (3 until it has learned), a whole number from 1 to 28 sets it, and off turns the warning off."},
     {"name": "deadline_reminder_days", "label": "Deadline reminder days", "type": "list", "items": {"type": "integer"},
      "default": [7, 3, 1], "env": "DEADLINE_REMINDER_DAYS",
      "help": "Days before an activity deadline to remind about it, each from 0 to 60."},
