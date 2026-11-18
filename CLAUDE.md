@@ -149,8 +149,9 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   ahead of the database. Otherwise it answers `CHECKING` during a cycle, `FAILING` with a one-line
   message (cut at 300 characters) when the last cycle did not finish or the monitor has something
   to report (a site change, no enrollments, a course not found, a rejected password, an
-  unavailable boleto link), and `IDLE` otherwise. `Check` starts a cycle now, or refuses with
-  `a check is already running`.
+  unavailable boleto link), and `IDLE` otherwise. When both apply, the message gives the monitor's
+  note first and then the cycle's reason, joined by `; `. `Check` starts a cycle now, or refuses
+  with `a check is already running`.
 - The monitor serves `Watch` through the SDK's `serve_with_notifier`. It signals at start with the
   newest stored `seq`, after each committed batch of events, when a cycle starts and ends, when the
   hub-ahead state changes, and when the first read ends. A signal never makes the monitor call the
