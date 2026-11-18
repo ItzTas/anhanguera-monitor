@@ -257,9 +257,10 @@ hub's container, with the plugin already started once:
 docker exec monitor-hub /opt/monitor-hub/plugins/anhanguera/anhanguera-monitor probe
 ```
 
-- It does not need the hub cookie. It reads the same variables as the monitor, and when one is
-  missing it also looks for the name with the `ANHANGUERA__` prefix, because `docker exec` keeps
-  the hub's prefix. It never reads credentials from arguments.
+- It does not need the hub cookie. It reads the same settings as the monitor. When any variable
+  whose name starts with `ANHANGUERA__` is set, as inside the hub's container, it reads only the
+  prefixed names, so the hub's own `DATABASE_URL` never reaches it. With no such variable (a local
+  run) it reads only the plain names. It never reads credentials from arguments.
 - It reads the device id from the database (read-only, no migration, no writer lock). With no
   state row it stops with `start the plugin once first`.
 - It runs every operation once per enrollment (invoices, a boleto link for each invoice to pay) and

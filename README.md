@@ -77,6 +77,9 @@ token. Start the monitor once first, then run it inside the hub's container:
 docker exec monitor-hub /opt/monitor-hub/plugins/anhanguera/anhanguera-monitor probe
 ```
 
+Inside the container it reads the `ANHANGUERA__` variables set on the hub and ignores the hub's own
+`DATABASE_URL`. Run anywhere else, with no `ANHANGUERA__` variable set, it reads the plain names.
+
 It prints one JSON line with the shape and a verdict for each operation. It exits 0 when every
 verdict is `ok`, 2 when some are not, and 1 when it could not run. Compare the shapes with
 `docs/site-api.md`.
