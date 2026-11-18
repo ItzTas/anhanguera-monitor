@@ -54,3 +54,23 @@ fn validate_settings_reports_conversion_and_other_problems_together() {
     assert!(paths.contains(&"reminder_hour"), "{paths:?}");
     assert!(paths.contains(&"courses"), "{paths:?}");
 }
+
+#[test]
+fn validate_settings_refuses_a_log_level_outside_its_choices() {
+    let output = run(&[
+        ("DATABASE_URL", "postgres://x"),
+        ("AVA_USERNAME", "12345678909"),
+        ("AVA_PASSWORD", "x"),
+        ("COURSES", "A"),
+        ("LOG_LEVEL", "verbose"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        answer(&output),
+        serde_json::json!({"problems": [{
+            "path": "log_level",
+            "message": "must be one of trace, debug, info, warn, error"
+        }]})
+    );
+}

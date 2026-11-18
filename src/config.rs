@@ -298,6 +298,7 @@ fn build(
         raw.ava_graphql_url.clone(),
         &mut problems,
     );
+    problems.extend(choice_problems(document));
 
     let (
         Some(database_url),
@@ -369,6 +370,41 @@ fn type_problems(document: &Value) -> Vec<PathProblem> {
             Some(PathProblem::new(&name, format!("must be {kind}")))
         })
         .collect()
+}
+
+fn choice_problems(document: &Value) -> Vec<PathProblem> {
+    declared_fields()
+        .iter()
+        .filter_map(|field| {
+            let name = text_of(field, "name");
+            let (options, rule) = declared_choices(field)?;
+            let value = document.get(&name).filter(|v| !v.is_null())?;
+            let values = value
+                .as_array()
+                .map_or_else(|| vec![value], |items| items.iter().collect());
+            let allowed = |v: &&Value| v.as_str().is_some_and(|text| options.contains(&text));
+            if values.iter().all(allowed) {
+                return None;
+            }
+            Some(PathProblem::new(
+                &name,
+                format!("{rule} be one of {}", options.join(", ")),
+            ))
+        })
+        .collect()
+}
+
+fn declared_choices(field: &Value) -> Option<(Vec<&str>, &'static str)> {
+    let (options, rule) = match field.get("options") {
+        Some(options) => (options, "must"),
+        None => (field.get("items")?.get("options")?, "each item must"),
+    };
+    let options = options
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    Some((options, rule))
 }
 
 fn declared_kind(field: &Value) -> String {
@@ -733,6 +769,47 @@ mod tests {
         assert_eq!(read("28"), Some(BillingDayNet::Fixed(28)));
         assert_eq!(read("0"), None);
         assert_eq!(read("29"), None);
+    }
+
+    #[test]
+    fn choices_must_be_declared_options() {
+        let config = load(&with(&[
+            ("LOG_LEVEL", "debug"),
+            ("CALENDAR_CATEGORIES", "SECRETARIAT, UNIQUE_EVENTS"),
+        ]))
+        .expect("valid configuration");
+        assert_eq!(config.log_level, "debug");
+        assert_eq!(
+            config.calendar_categories,
+            vec!["SECRETARIAT", "UNIQUE_EVENTS"]
+        );
+
+        let problems = problems_of(&with(&[
+            ("LOG_LEVEL", "verbose"),
+            ("CALENDAR_CATEGORIES", "FINANCIAL,HOLIDAYS"),
+        ]));
+        assert_eq!(
+            problems,
+            vec![
+                PathProblem::new(
+                    "calendar_categories",
+                    "each item must be one of FINANCIAL, SECRETARIAT, UNIQUE_EVENTS"
+                ),
+                PathProblem::new(
+                    "log_level",
+                    "must be one of trace, debug, info, warn, error"
+                ),
+            ]
+        );
+
+        let mut document = full_document();
+        document.remove("database_url_file");
+        document.remove("ava_password_file");
+        document.insert("log_level".to_owned(), Value::from("INFO"));
+        assert_eq!(
+            paths(&validate(&Value::Object(document))),
+            vec!["log_level"]
+        );
     }
 
     #[test]
