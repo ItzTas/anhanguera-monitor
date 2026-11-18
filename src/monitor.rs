@@ -29,7 +29,7 @@ const LINE_MAX: usize = 300;
 const QUIZ_CALLS: usize = 3;
 const KEEP_EVENTS: i64 = 200;
 const KEEP_KEYS_DAYS: i64 = 400;
-const DATABASE_UNAVAILABLE: &str = "the database is unavailable";
+pub const DATABASE_UNAVAILABLE: &str = "the database is unavailable";
 const BOLETO_UNAVAILABLE: &str = "boleto link unavailable";
 const NO_ENROLLMENTS: &str = "the portal listed no course enrollments";
 

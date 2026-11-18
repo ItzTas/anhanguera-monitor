@@ -1,0 +1,476 @@
+use std::error::Error;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, SystemTime};
+
+use chrono::{DateTime, TimeDelta, Utc};
+use monitor_hub_plugin::Notifier;
+use monitor_hub_plugin::proto::plugin_server::Plugin;
+use monitor_hub_plugin::proto::{
+    CheckRequest, CheckResponse, DescribeRequest, DescribeResponse, Event, EventKind,
+    EventsRequest, EventsResponse, Severity, State, StatusRequest, StatusResponse,
+};
+use prost_types::Timestamp;
+use tonic::{Request, Response, Status};
+use tracing::{error, warn};
+
+use crate::events::Kind;
+use crate::monitor::DATABASE_UNAVAILABLE;
+use crate::portal::Portal;
+use crate::scheduler::{CycleState, Scheduler};
+use crate::store::{StoreError, StoredEvent};
+
+const PLUGIN_NAME: &str = "anhanguera";
+const DISPLAY_NAME: &str = "Anhanguera";
+const DEFAULT_LIMIT: i64 = 100;
+const MAX_LIMIT: i64 = 500;
+const STATUS_QUERY_LIMIT: Duration = Duration::from_secs(10);
+const ALREADY_RUNNING: &str = "a check is already running";
+const HUB_AHEAD: &str =
+    "the hub is ahead of this database: reset the hub's position for this plugin";
+
+pub struct AnhangueraPlugin<P> {
+    scheduler: Arc<Scheduler<P>>,
+    first_read_boundary: Option<i64>,
+    first_read_over: AtomicBool,
+    hub_ahead: AtomicBool,
+    hub_ahead_reported: AtomicBool,
+    status_query_limit: Duration,
+}
+
+impl<P: Portal> AnhangueraPlugin<P> {
+    pub fn new(scheduler: Arc<Scheduler<P>>) -> AnhangueraPlugin<P> {
+        AnhangueraPlugin {
+            scheduler,
+            first_read_boundary: None,
+            first_read_over: AtomicBool::new(false),
+            hub_ahead: AtomicBool::new(false),
+            hub_ahead_reported: AtomicBool::new(false),
+            status_query_limit: STATUS_QUERY_LIMIT,
+        }
+    }
+
+    pub fn with_first_read_boundary(mut self, boundary: i64) -> AnhangueraPlugin<P> {
+        self.first_read_boundary = Some(boundary);
+        self
+    }
+
+    async fn read_events(&self, after: i64, limit: i64) -> Result<(Vec<Event>, i64), StoreError> {
+        let store = self.scheduler.monitor().store();
+        let last_issued = store.last_issued_seq().await?;
+        let hub_ahead = after > last_issued;
+        self.track_hub_ahead(hub_ahead);
+        if hub_ahead {
+            self.report_hub_ahead(after, last_issued);
+            return Ok((Vec::new(), last_issued));
+        }
+        store.ack(after).await?;
+        let stored = store.events_after(after, limit).await?;
+        let boundary = self.active_boundary();
+        let events = stored
+            .into_iter()
+            .take_while(|stored| boundary.is_none_or(|boundary| stored.seq <= boundary))
+            .map(event)
+            .collect();
+        Ok((events, last_issued))
+    }
+
+    fn track_hub_ahead(&self, hub_ahead: bool) {
+        let was_ahead = self.hub_ahead.swap(hub_ahead, Ordering::Relaxed);
+        if was_ahead == hub_ahead {
+            return;
+        }
+        self.notifier().status_changed();
+    }
+
+    fn end_first_read(&self, last_issued: i64) {
+        let was_over = self.first_read_over.swap(true, Ordering::Relaxed);
+        if was_over || self.first_read_boundary.is_none() {
+            return;
+        }
+        self.notifier().notify(last_issued);
+    }
+
+    fn notifier(&self) -> &Notifier {
+        self.scheduler.monitor().notifier()
+    }
+
+    fn active_boundary(&self) -> Option<i64> {
+        if self.first_read_over.load(Ordering::Relaxed) {
+            return None;
+        }
+        self.first_read_boundary
+    }
+
+    fn report_hub_ahead(&self, after: i64, last_issued: i64) {
+        if self.hub_ahead_reported.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        error!(after, last_issued, "{HUB_AHEAD}");
+    }
+
+    async fn last_success(&self) -> Option<Option<DateTime<Utc>>> {
+        let store = self.scheduler.monitor().store();
+        let limit = self.status_query_limit;
+        let read = tokio::time::timeout(limit, store.last_success()).await;
+        let Ok(read) = read else {
+            warn!("reading the last success took longer than {limit:?}");
+            return None;
+        };
+        read.inspect_err(|failure| {
+            warn!(
+                error = failure as &dyn Error,
+                "could not read the last success"
+            );
+        })
+        .ok()
+    }
+}
+
+#[tonic::async_trait]
+impl<P: Portal> Plugin for AnhangueraPlugin<P> {
+    async fn describe(
+        &self,
+        _: Request<DescribeRequest>,
+    ) -> Result<Response<DescribeResponse>, Status> {
+        Ok(Response::new(DescribeResponse {
+            name: PLUGIN_NAME.to_owned(),
+            display_name: DISPLAY_NAME.to_owned(),
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            kinds: Kind::ALL.into_iter().map(kind).collect(),
+        }))
+    }
+
+    async fn status(&self, _: Request<StatusRequest>) -> Result<Response<StatusResponse>, Status> {
+        let cycle = self.scheduler.state();
+        let last_success = self.last_success().await;
+        let interval = self.scheduler.monitor().interval();
+        let hub_ahead = self.hub_ahead.load(Ordering::Relaxed);
+        let message = self.scheduler.monitor().status_message();
+        Ok(Response::new(status_of(
+            &cycle,
+            message,
+            last_success,
+            interval,
+            hub_ahead,
+        )))
+    }
+
+    async fn check(&self, _: Request<CheckRequest>) -> Result<Response<CheckResponse>, Status> {
+        if self.scheduler.trigger() {
+            return Ok(Response::new(CheckResponse {
+                accepted: true,
+                message: String::new(),
+            }));
+        }
+        Ok(Response::new(CheckResponse {
+            accepted: false,
+            message: ALREADY_RUNNING.to_owned(),
+        }))
+    }
+
+    async fn events(
+        &self,
+        request: Request<EventsRequest>,
+    ) -> Result<Response<EventsResponse>, Status> {
+        let EventsRequest { after, limit } = request.into_inner();
+        let limit = effective_limit(limit);
+        let (events, last_issued) = self.read_events(after, limit).await.map_err(unavailable)?;
+        if (events.len() as i64) < limit {
+            self.end_first_read(last_issued);
+        }
+        Ok(Response::new(EventsResponse { events }))
+    }
+}
+
+fn kind(kind: Kind) -> EventKind {
+    EventKind {
+        id: kind.id().to_owned(),
+        description: kind.description().to_owned(),
+    }
+}
+
+fn effective_limit(requested: i32) -> i64 {
+    if requested <= 0 {
+        return DEFAULT_LIMIT;
+    }
+    i64::from(requested).min(MAX_LIMIT)
+}
+
+fn unavailable(failure: StoreError) -> Status {
+    warn!(error = &failure as &dyn Error, "could not read the events");
+    Status::unavailable(DATABASE_UNAVAILABLE)
+}
+
+fn event(stored: StoredEvent) -> Event {
+    let severity = if stored.urgent {
+        Severity::Urgent
+    } else {
+        Severity::Info
+    };
+    Event {
+        seq: stored.seq,
+        id: stored.id,
+        kind: stored.kind,
+        severity: severity.into(),
+        occurred_at: Some(timestamp(stored.occurred_at)),
+        title: stored.title,
+        body: stored.body,
+        url: stored.url,
+        payload: None,
+    }
+}
+
+fn status_of(
+    cycle: &CycleState,
+    message: Option<String>,
+    last_success: Option<Option<DateTime<Utc>>>,
+    interval: Duration,
+    hub_ahead: bool,
+) -> StatusResponse {
+    let (state, message) = state_and_message(cycle, message, last_success.is_some(), hub_ahead);
+    StatusResponse {
+        state: state.into(),
+        message,
+        last_check_started_at: cycle.last_started.map(timestamp),
+        last_success_at: last_success.flatten().map(timestamp),
+        next_check_at: next_check(cycle, interval).map(timestamp),
+    }
+}
+
+fn state_and_message(
+    cycle: &CycleState,
+    message: Option<String>,
+    database_answered: bool,
+    hub_ahead: bool,
+) -> (State, String) {
+    if hub_ahead {
+        return (State::Failing, HUB_AHEAD.to_owned());
+    }
+    if cycle.running {
+        return (State::Checking, String::new());
+    }
+    if let Some(message) = message.or_else(|| cycle.problem.clone()) {
+        return (State::Failing, message);
+    }
+    if !database_answered {
+        return (State::Failing, DATABASE_UNAVAILABLE.to_owned());
+    }
+    (State::Idle, String::new())
+}
+
+fn next_check(cycle: &CycleState, interval: Duration) -> Option<DateTime<Utc>> {
+    if cycle.running {
+        return None;
+    }
+    let interval = TimeDelta::from_std(interval).ok()?;
+    cycle.last_finished?.checked_add_signed(interval)
+}
+
+fn timestamp(at: DateTime<Utc>) -> Timestamp {
+    Timestamp::from(SystemTime::from(at))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use chrono::{DateTime, NaiveDate, Utc};
+    use chrono_tz::Tz;
+    use monitor_hub_plugin::migrate::up;
+    use monitor_hub_plugin::proto::plugin_server::Plugin;
+    use monitor_hub_plugin::proto::{EventsRequest, State, StatusRequest};
+    use monitor_hub_plugin_testkit::database;
+    use serde_json::{Value, json};
+    use tokio::net::TcpListener;
+    use tokio::runtime::{Builder, Runtime};
+    use tokio_postgres::NoTls;
+    use tonic::Request;
+
+    use super::{AnhangueraPlugin, HUB_AHEAD, STATUS_QUERY_LIMIT};
+    use crate::ava::AvaError;
+    use crate::ava::model::{CalendarEvent, CourseEnrollment, InvoiceHome, Quiz, Subject};
+    use crate::config::BillingDayNet;
+    use crate::logtest::{captured, logged};
+    use crate::monitor::{Monitor, MonitorOptions};
+    use crate::payments::PaymentOptions;
+    use crate::portal::Portal;
+    use crate::reminders::ReminderRule;
+    use crate::scheduler::Scheduler;
+    use crate::store::{MIGRATIONS, Store};
+
+    struct SilentPortal;
+
+    fn silent<T>() -> Result<T, AvaError> {
+        Err(AvaError::Unavailable("silent".to_owned()))
+    }
+
+    impl Portal for SilentPortal {
+        async fn student_id(&self) -> Result<String, AvaError> {
+            silent()
+        }
+
+        async fn course_enrollments(&self, _: &str) -> Result<Vec<CourseEnrollment>, AvaError> {
+            silent()
+        }
+
+        async fn invoices(&self, _: &str) -> Result<InvoiceHome, AvaError> {
+            silent()
+        }
+
+        async fn boleto_url(&self, _: &str, _: &str) -> Result<String, AvaError> {
+            silent()
+        }
+
+        async fn subjects(&self, _: &str) -> Result<Vec<Subject>, AvaError> {
+            silent()
+        }
+
+        async fn quizzes(&self, _: &str) -> Result<Vec<Quiz>, AvaError> {
+            silent()
+        }
+
+        async fn calendar(&self, _: &str, _: NaiveDate) -> Result<Vec<CalendarEvent>, AvaError> {
+            silent()
+        }
+
+        fn login_backoff_until(&self) -> Option<DateTime<Utc>> {
+            None
+        }
+    }
+
+    fn runtime() -> Runtime {
+        Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
+    fn plugin(url: &str) -> AnhangueraPlugin<SilentPortal> {
+        let now = DateTime::parse_from_rfc3339("2026-12-01T15:00:00Z")
+            .expect("timestamp")
+            .to_utc();
+        let rule = ReminderRule {
+            thresholds: vec![3, 1],
+            hour: 9,
+            tz: Tz::America__Sao_Paulo,
+        };
+        let options = MonitorOptions {
+            courses: Vec::new(),
+            payments: PaymentOptions {
+                reminders: rule.clone(),
+                overdue_repeat: None,
+                billing_day_net: BillingDayNet::Off,
+                check_interval: Duration::from_secs(30 * 60),
+            },
+            deadlines: rule,
+            calendar_categories: Vec::new(),
+            boleto_link: false,
+            failing_alert_after: Duration::from_secs(3600),
+            interval: Duration::from_secs(30 * 60),
+            tz: Tz::America__Sao_Paulo,
+            clock: Arc::new(move || now),
+        };
+        let monitor = Monitor::new(Store::new(url).expect("store"), SilentPortal, options);
+        AnhangueraPlugin::new(Scheduler::new(Arc::new(monitor)))
+    }
+
+    async fn migrate(url: &str) {
+        let (mut client, connection) = tokio_postgres::connect(url, NoTls).await.expect("connect");
+        tokio::spawn(connection);
+        up(&mut client, MIGRATIONS).await.expect("migrate");
+    }
+
+    #[test]
+    fn a_hub_ahead_of_the_database_is_reported_once() {
+        let runtime = runtime();
+        let Some(db) = runtime.block_on(database()) else {
+            return;
+        };
+        runtime.block_on(migrate(&db.url));
+        let plugin = plugin(&db.url);
+        let store = plugin.scheduler.monitor().store();
+        runtime
+            .block_on(plugin.scheduler.monitor().prepare("device-1".to_owned()))
+            .expect("prepare");
+        let newest = runtime.block_on(store.last_issued_seq()).expect("newest");
+        let ahead = newest + 5;
+
+        let events = captured(|| {
+            for _ in 0..2 {
+                let request = Request::new(EventsRequest {
+                    after: ahead,
+                    limit: 0,
+                });
+                let page = runtime.block_on(plugin.events(request)).expect("events");
+                assert!(page.into_inner().events.is_empty());
+            }
+        });
+
+        assert_eq!(
+            events,
+            [logged(&[
+                ("after", &ahead.to_string()),
+                ("last_issued", &newest.to_string()),
+                ("level", "ERROR"),
+                ("message", HUB_AHEAD),
+            ])]
+        );
+    }
+
+    #[tokio::test]
+    async fn status_answers_within_its_limit_when_the_database_is_silent() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let address = listener.local_addr().expect("address");
+        let silent = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let mut plugin = plugin(&format!(
+            "postgres://anhanguera:hunter2@{address}/anhanguera"
+        ));
+        assert_eq!(plugin.status_query_limit, STATUS_QUERY_LIMIT);
+        assert_eq!(STATUS_QUERY_LIMIT, Duration::from_secs(10));
+        let limit = Duration::from_millis(300);
+        plugin.status_query_limit = limit;
+
+        let started = Instant::now();
+        let answered = tokio::time::timeout(
+            Duration::from_secs(3),
+            plugin.status(Request::new(StatusRequest {})),
+        )
+        .await;
+        let elapsed = started.elapsed();
+        silent.abort();
+
+        let status = answered
+            .expect("Status answered before the watchdog")
+            .expect("status")
+            .into_inner();
+        assert!(elapsed < limit + Duration::from_secs(1), "took {elapsed:?}");
+        assert_eq!(status.state, i32::from(State::Failing));
+        assert_eq!(status.message, "the database is unavailable");
+        assert_eq!(status.last_success_at, None);
+    }
+
+    #[test]
+    fn plugin_json_matches_the_contract() {
+        let manifest: Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/plugin.json"
+        )))
+        .expect("plugin.json is JSON");
+
+        assert_eq!(
+            manifest,
+            json!({
+                "protocol_version": 1,
+                "name": "anhanguera",
+                "command": ["anhanguera-monitor", "plugin"],
+            })
+        );
+    }
+}
