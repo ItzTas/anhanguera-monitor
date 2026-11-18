@@ -1,6 +1,7 @@
 pub mod app;
 pub mod ava;
 pub mod config;
+pub mod coursework;
 pub mod dates;
 pub mod events;
 pub mod payments;
