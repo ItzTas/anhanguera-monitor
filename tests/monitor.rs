@@ -596,6 +596,38 @@ async fn payments_cover_enrollments_outside_courses() {
 }
 
 #[tokio::test]
+async fn overdue_reminders_keep_counting_when_two_enrollments_list_one_invoice() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let clock = MovableClock::starting_at(utc("2026-12-11T15:00:00Z"));
+    let portal = FakePortal::new();
+    portal.set_enrollments(Ok(vec![
+        enrollment("ce-1", ENGINEERING),
+        enrollment("ce-2", LAW),
+    ]));
+    for id in ["ce-1", "ce-2"] {
+        portal.set_invoices(id, Ok(home(vec![open_invoice("inv-1", "2026-12-10")])));
+    }
+    let monitor = prepared(&db.url, &portal, options(ENGINEERING, &clock)).await;
+
+    for _ in 0..5 {
+        assert_eq!(monitor.run_cycle().await, CycleOutcome::Completed);
+        clock.advance(TimeDelta::hours(24));
+    }
+
+    let recorded = events(&monitor).await;
+    assert_eq!(
+        ids(&of_kind(&recorded, "invoice_open")),
+        ["invoice-open:inv-1"]
+    );
+    let expected: Vec<String> = (0..5)
+        .map(|count| format!("payment-overdue:inv-1:2026-12-10:{count}"))
+        .collect();
+    assert_eq!(ids(&of_kind(&recorded, "payment_overdue")), expected);
+}
+
+#[tokio::test]
 async fn coursework_reminders_arrive_as_one_digest() {
     let Some(db) = migrated_database().await else {
         return;

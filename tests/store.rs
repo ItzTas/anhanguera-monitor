@@ -172,6 +172,43 @@ async fn record_persists_keys_invoices_and_enrollments() {
 }
 
 #[tokio::test]
+async fn an_invoice_id_under_two_enrollments_keeps_one_row_per_enrollment() {
+    let Some(db) = support::migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    let mut first = invoice("inv-1", 5, start());
+    let second = KnownInvoice {
+        course_enrollment_id: "enrollment-2".to_owned(),
+        lead_days: Some(9),
+        announced: true,
+        overdue_count: 3,
+        last_overdue_at: Some(start()),
+        ..first.clone()
+    };
+    let batch = RecordBatch {
+        invoices: vec![first.clone(), second.clone()],
+        ..RecordBatch::default()
+    };
+    store.record(&batch).await.expect("record");
+    first.overdue_count = 1;
+    let update = RecordBatch {
+        invoices: vec![first.clone()],
+        ..RecordBatch::default()
+    };
+    store.record(&update).await.expect("update");
+
+    assert_eq!(
+        store.known_invoices("enrollment-1").await.expect("first"),
+        vec![first]
+    );
+    assert_eq!(
+        store.known_invoices("enrollment-2").await.expect("second"),
+        vec![second]
+    );
+}
+
+#[tokio::test]
 async fn lead_times_are_newest_first_and_capped_at_six() {
     let Some(db) = support::migrated_database().await else {
         return;

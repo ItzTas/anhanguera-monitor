@@ -10,11 +10,18 @@ use tokio::task::{JoinError, JoinHandle};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, NoTls, Row, Transaction};
 
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "00001_init.sql",
-    sql: include_str!("../sql/schema/00001_init.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "00001_init.sql",
+        sql: include_str!("../sql/schema/00001_init.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "00002_invoice_per_enrollment.sql",
+        sql: include_str!("../sql/schema/00002_invoice_per_enrollment.sql"),
+    },
+];
 
 pub const WRITER_LOCK_ID: i64 = 0x616e_6867_7565_7261;
 
@@ -44,8 +51,7 @@ ON CONFLICT (key) DO NOTHING";
 const SENT_KEYS: &str = "SELECT key FROM sent_keys";
 const UPSERT_INVOICE: &str = "INSERT INTO invoices (id, course_enrollment_id, due_date, status, first_seen_at, lead_days, announced, closed_at, overdue_count, last_overdue_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (id) DO UPDATE SET
-    course_enrollment_id = EXCLUDED.course_enrollment_id,
+ON CONFLICT (course_enrollment_id, id) DO UPDATE SET
     due_date = EXCLUDED.due_date,
     status = EXCLUDED.status,
     first_seen_at = EXCLUDED.first_seen_at,
