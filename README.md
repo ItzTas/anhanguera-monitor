@@ -69,6 +69,21 @@ docker buildx build --platform linux/amd64,linux/arm64 -t anhanguera-monitor .
 It keeps its state in Postgres, so give it its own database. It takes a lock on that database, so a
 second copy on the same database refuses to start.
 
+## Releases
+
+When a push to `main` passes the tests, the workflow works out the next version from the Conventional
+Commits since the last `v*` tag:
+
+- `feat` bumps the minor version.
+- `fix`, `perf`, `chore`, `refactor` and `build` bump the patch version.
+- A breaking `feat!`, `fix!` or `perf!` (or a `BREAKING CHANGE:` footer on those types) bumps the major
+  version. A breaking `chore!`, `refactor!` or `build!` is still a patch.
+- `docs`, `test`, `ci` and `style` make no release.
+
+When a release is due, the same run tags `vX.Y.Z`, creates a GitHub Release with the changelog and
+publishes the image as `X.Y.Z`, `X.Y`, `latest` and `sha-…`. `Cargo.toml`'s version is not updated,
+because the crate is not published.
+
 ## Checking what the portal answers
 
 `probe` runs every query once and prints only the shape of the answers, never a value, id, name or

@@ -88,10 +88,19 @@ start the plugin. Run them with a short one (`TMPDIR=/tmp`). The same holds unde
 `TMPDIR` is `/tmp`.
 
 CI (`.github/workflows/docker.yml`) runs `cargo fmt --check`, clippy and `cargo test --locked`
-against a `postgres:18-alpine` service, with Go 1.27.2 for the conformance command. Then it builds
-the image for amd64 and arm64 and publishes it to `ghcr.io` on every run that is not a pull
-request: pushes to `main`, `v*` tags and manual runs. A `v*` tag gets the version tags (`2.1.0` and
-`2.1`), only the default branch moves `latest`, and every image gets a `sha-` tag.
+against a `postgres:18-alpine` service, with Go 1.27.2 for the conformance command. On a push to
+`main` the `release` job then computes the next version from the Conventional Commits since the last
+`v*` tag (`mathieudutour/github-tag-action`): `feat` is minor; `fix`, `perf`, `chore`, `refactor` and
+`build` are patch; a breaking `feat!`, `fix!` or `perf!` (or a `BREAKING CHANGE:` footer on those
+types) is major, while a breaking `chore!`, `refactor!` or `build!` stays a patch; `docs`, `test`,
+`ci` and `style` make no release. It tags `vX.Y.Z` and creates a GitHub Release with the changelog.
+A tag pushed with `GITHUB_TOKEN` starts no new run, so the `image` job builds in the same run and
+takes the version from the `release` job. `Cargo.toml`'s version is not updated (`publish = false`).
+The image for amd64 and arm64 goes to `ghcr.io` on every run that is not a pull request: pushes to
+`main`, `v*` tags and manual runs. A release gets the version tags (`2.1.0` and `2.1`), only the
+default branch moves `latest`, and every image gets a `sha-` tag. A `v*` tag pushed by hand still
+publishes its version tags. The workflow's `concurrency` serializes `main` pushes so two runs never
+compute the same tag.
 
 ## Configuration
 
