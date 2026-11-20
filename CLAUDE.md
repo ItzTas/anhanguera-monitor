@@ -27,8 +27,10 @@ enums, and how each fact was established. Read it before touching `queries/` or 
 
 ## Code
 
-- **Do not write comments in the code.** No `//`, `///` or `//!`. Names explain what the code
-  does. Attributes such as `#[cfg(test)]` are not comments.
+- **Keep comments short, and write one only where it explains something worth explaining**: a
+  guarantee, a rule that comes from outside the code, a pointer to this file. Leave obvious code
+  without one, and never write a comment that repeats the code. Attributes such as `#[cfg(test)]`
+  are not comments.
 - **No `#[allow]` or `#[expect]`, in tests either.** Every integration test file declares
   `pub mod support;`.
 - **English everywhere**: identifiers, file names, SQL, logs, error messages, event text and the
