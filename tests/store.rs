@@ -408,3 +408,19 @@ async fn newest_seq_ignores_a_burned_sequence_value() {
     assert_eq!(Some(newest), stored.last().map(|stored| stored.seq));
     assert_eq!(store.last_issued_seq().await.expect("issued"), newest + 1);
 }
+
+#[tokio::test]
+async fn test_databases_are_reached_over_tcp() {
+    let Some(database) = support::database().await else {
+        return;
+    };
+    let (client, connection) = tokio_postgres::connect(&database.url, tokio_postgres::NoTls)
+        .await
+        .expect("connect to the test database");
+    tokio::spawn(connection);
+    let row = client
+        .query_one("SELECT inet_server_addr() IS NOT NULL", &[])
+        .await
+        .expect("read the server address");
+    assert!(row.get::<_, bool>(0));
+}

@@ -1,5 +1,6 @@
 pub mod fake_ava;
 pub mod fake_portal;
+pub mod postgres;
 pub mod process;
 
 use std::sync::{Arc, Mutex, PoisonError};
@@ -10,9 +11,10 @@ use anhanguera_monitor::timestamp::Clock;
 use chrono::{DateTime, TimeDelta, Utc};
 use monitor_hub_plugin::Signals;
 use monitor_hub_plugin::migrate::up;
-use monitor_hub_plugin_testkit::{Database, database};
 use tokio::time::timeout;
 use tokio_postgres::NoTls;
+
+pub use postgres::{Database, database};
 
 pub const SIGNAL_WAIT: Duration = Duration::from_secs(5);
 

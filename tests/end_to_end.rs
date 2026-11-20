@@ -6,8 +6,8 @@ use std::time::Duration;
 use monitor_hub_plugin::proto::{
     Event, EventsRequest, EventsResponse, WatchRequest, WatchResponse,
 };
-use monitor_hub_plugin_testkit::database;
 use serde_json::Value;
+use support::database;
 use tokio::time::{Instant, timeout_at};
 use tonic::client::Grpc;
 use tonic::codegen::http::uri::PathAndQuery;

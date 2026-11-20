@@ -291,12 +291,12 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
+    use crate::postgres::database;
     use chrono::{DateTime, NaiveDate, Utc};
     use chrono_tz::Tz;
     use monitor_hub_plugin::migrate::up;
     use monitor_hub_plugin::proto::plugin_server::Plugin;
     use monitor_hub_plugin::proto::{EventsRequest, State, StatusRequest};
-    use monitor_hub_plugin_testkit::database;
     use serde_json::{Value, json};
     use tokio::net::TcpListener;
     use tokio::runtime::{Builder, Runtime};

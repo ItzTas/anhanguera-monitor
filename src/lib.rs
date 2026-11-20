@@ -9,6 +9,9 @@ mod logtest;
 pub mod monitor;
 pub mod payments;
 pub mod portal;
+#[cfg(test)]
+#[path = "../tests/support/postgres.rs"]
+mod postgres;
 pub mod probe;
 pub mod reminders;
 pub mod scheduler;
