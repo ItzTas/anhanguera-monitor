@@ -2,6 +2,7 @@ pub mod fake_ava;
 pub mod fake_portal;
 pub mod postgres;
 pub mod process;
+pub mod schema;
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -11,12 +12,21 @@ use anhanguera_monitor::timestamp::Clock;
 use chrono::{DateTime, TimeDelta, Utc};
 use monitor_hub_plugin::Signals;
 use monitor_hub_plugin::migrate::up;
+use sea_orm::{ConnectOptions, DatabaseConnection};
 use tokio::time::timeout;
 use tokio_postgres::NoTls;
 
 pub use postgres::{Database, database};
 
 pub const SIGNAL_WAIT: Duration = Duration::from_secs(5);
+
+pub async fn orm(url: &str) -> DatabaseConnection {
+    let mut options = ConnectOptions::new(url);
+    options.sqlx_logging(false);
+    sea_orm::Database::connect(options)
+        .await
+        .expect("connect to the test database through SeaORM")
+}
 
 pub async fn migrated_database() -> Option<Database> {
     let database = database().await?;

@@ -6,6 +6,7 @@ pub mod dates;
 pub mod events;
 #[cfg(test)]
 mod logtest;
+pub mod migration;
 pub mod monitor;
 pub mod payments;
 pub mod portal;
