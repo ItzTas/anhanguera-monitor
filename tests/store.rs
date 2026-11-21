@@ -8,7 +8,11 @@ use anhanguera_monitor::store::{EnrollmentState, KnownInvoice, RecordBatch, Stor
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use tokio::net::TcpListener;
 
+use support::{next_signal, pending_signal};
+
 const PASSWORD: &str = "hunter2";
+const REFUSE_EVENTS_AT_COMMIT: &str = "CREATE FUNCTION refuse_events() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused at commit'; END $$;
+CREATE CONSTRAINT TRIGGER refuse_at_commit AFTER INSERT ON events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION refuse_events();";
 
 fn start() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-11-05T12:00:00Z")
@@ -123,6 +127,72 @@ async fn record_returns_highest_seq_and_events_come_back_in_order() {
     let after_first = store.events_after(events[1].seq, 1).await.expect("after");
     assert_eq!(after_first.len(), 1);
     assert_eq!(after_first[0].id, "b");
+}
+
+#[tokio::test]
+async fn record_signals_the_seq_it_committed() {
+    let Some(db) = support::migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    let mut signals = store.notifier().subscribe();
+    signals.latest_seq();
+    // The welcome is already stored: no row, but its insert spends a sequence value.
+    let batch = batch_of(vec![event("a"), event("b"), event("welcome")]);
+    let keys_only = RecordBatch {
+        sent_keys: vec!["key-1".to_owned()],
+        ..RecordBatch::default()
+    };
+
+    let recorded = store.record(&batch).await.expect("record");
+    let signalled = next_signal(&mut signals).await;
+    let issued = store.last_issued_seq().await.expect("issued");
+    let again = store.record(&batch).await.expect("record again");
+    let after_the_conflicts = pending_signal(&mut signals).await;
+    store.record(&keys_only).await.expect("record keys");
+    let after_the_keys = pending_signal(&mut signals).await;
+
+    let stored = store.events_after(0, 100).await.expect("events");
+    assert_eq!(recorded, stored.last().map(|stored| stored.seq));
+    assert_eq!(Some(signalled), recorded);
+    assert_eq!(issued, signalled + 1);
+    assert_eq!(again, None);
+    assert_eq!(after_the_conflicts, None);
+    assert_eq!(after_the_keys, None);
+}
+
+#[tokio::test]
+async fn a_record_refused_at_commit_signals_nothing() {
+    let Some(db) = support::migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    store
+        .record(&batch_of(vec![event("committed")]))
+        .await
+        .expect("record");
+    let (client, connection) = tokio_postgres::connect(&db.url, tokio_postgres::NoTls)
+        .await
+        .expect("connect");
+    tokio::spawn(connection);
+    client
+        .batch_execute(REFUSE_EVENTS_AT_COMMIT)
+        .await
+        .expect("a trigger that refuses every event at commit");
+    let before = store.events_after(0, 100).await.expect("events");
+    let mut signals = store.notifier().subscribe();
+    let seen = signals.latest_seq();
+
+    let refused = store.record(&batch_of(vec![event("refused")])).await;
+    let signalled = pending_signal(&mut signals).await;
+
+    assert!(
+        matches!(refused, Err(StoreError::Database(_))),
+        "{refused:?}"
+    );
+    assert_eq!(signalled, None);
+    assert_eq!(signals.latest_seq(), seen);
+    assert_eq!(store.events_after(0, 100).await.expect("events"), before);
 }
 
 #[tokio::test]

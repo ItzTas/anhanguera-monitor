@@ -143,11 +143,12 @@ struct Coursework {
 
 impl<P: Portal> Monitor<P> {
     pub fn new(store: Store, portal: P, options: MonitorOptions) -> Monitor<P> {
+        let notifier = Notifier::new();
         Monitor {
-            store,
+            store: store.with_notifier(notifier.clone()),
             portal,
             options,
-            notifier: Notifier::new(),
+            notifier,
             memory: Mutex::default(),
         }
     }
@@ -689,10 +690,7 @@ impl<P: Portal> Monitor<P> {
         if is_empty(batch) {
             return Ok(());
         }
-        let Some(seq) = self.store.record(batch).await? else {
-            return Ok(());
-        };
-        self.notifier.notify(seq);
+        self.store.record(batch).await?;
         Ok(())
     }
 

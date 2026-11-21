@@ -9,6 +9,7 @@ use crate::events::{Kind, NewEvent};
 use chrono::{DateTime, NaiveDate, Utc};
 use connection::{CONNECT_TIMEOUT, Limits, POOL_LIMITS, database_options, pool};
 use entity::{enrollments, events, invoices, monitor_state, problems, sent_keys};
+use monitor_hub_plugin::Notifier;
 use monitor_hub_plugin::migrate::{MigrateError, Migration, up};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
@@ -215,6 +216,7 @@ impl WriterLock {
 #[derive(Clone)]
 pub struct Store {
     connection: DatabaseConnection,
+    notifier: Notifier,
 }
 
 impl Store {
@@ -226,7 +228,16 @@ impl Store {
         let options = connection::with_limits(database_options(database_url)?, limits);
         Ok(Store {
             connection: pool(options),
+            notifier: Notifier::new(),
         })
+    }
+
+    pub(crate) fn with_notifier(self, notifier: Notifier) -> Store {
+        Store { notifier, ..self }
+    }
+
+    pub fn notifier(&self) -> &Notifier {
+        &self.notifier
     }
 
     #[cfg(test)]
@@ -234,6 +245,8 @@ impl Store {
         &self.connection
     }
 
+    // No signal for the welcome: it is written at start-up, before the hub can read, and the
+    // start-up signal and the end of the first read announce it.
     pub async fn initialize(
         &self,
         new_device_id: String,
@@ -343,7 +356,11 @@ impl Store {
             upsert_enrollment(&transaction, id, state).await?;
         }
         transaction.commit().await?;
-        Ok(highest)
+        let Some(seq) = highest else {
+            return Ok(None);
+        };
+        self.notifier.notify(seq);
+        Ok(Some(seq))
     }
 
     pub async fn open_problem(
