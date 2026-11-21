@@ -107,10 +107,10 @@ async fn the_first_migration_builds_what_the_goose_files_build() {
 
 #[tokio::test]
 async fn a_database_at_goose_version_2_is_adopted_without_loss() {
-    let Some(db) = database().await else {
+    let (Some(db), Some(new)) = (database().await, database().await) else {
         return;
     };
-    let client = admin(&db.url).await;
+    let (client, new_client) = tokio::join!(admin(&db.url), admin(&new.url));
     goose_era_database(&client, &[1, 2], &[1, 2]).await;
     seed_rows(&client, true).await;
     let before = kept_data(&client).await;
@@ -118,12 +118,19 @@ async fn a_database_at_goose_version_2_is_adopted_without_loss() {
     Migrator::up(&orm(&db.url).await, None)
         .await
         .expect("migrate");
+    Migrator::up(&orm(&new.url).await, None)
+        .await
+        .expect("migrate the new database");
 
     assert_eq!(kept_data(&client).await, before);
     assert_eq!(table_names(&client).await, TODAYS_TABLES);
     assert_eq!(
         texts(&client, SEAQL_VERSIONS).await,
         [GOOSE_SCHEMA, DROP_GOOSE_DB_VERSION]
+    );
+    assert_eq!(
+        schema_snapshot(&client, &[]).await,
+        schema_snapshot(&new_client, &[]).await
     );
 }
 
@@ -159,13 +166,14 @@ async fn a_goose_version_above_2_is_adopted() {
     let client = admin(&db.url).await;
     goose_era_database(&client, &[1, 2], &[1, 2, 3]).await;
     seed_rows(&client, true).await;
-    let events_before = rows(&client, "events").await;
+    let before = kept_data(&client).await;
 
     Migrator::up(&orm(&db.url).await, None)
         .await
         .expect("migrate");
 
-    assert_eq!(rows(&client, "events").await, events_before);
+    assert_eq!(kept_data(&client).await, before);
+    assert_eq!(table_names(&client).await, TODAYS_TABLES);
 }
 
 #[tokio::test]
