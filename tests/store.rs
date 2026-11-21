@@ -1,8 +1,14 @@
 pub mod support;
 
+use std::error::Error;
+use std::time::{Duration, Instant};
+
 use anhanguera_monitor::events::NewEvent;
-use anhanguera_monitor::store::{EnrollmentState, KnownInvoice, RecordBatch, Store};
+use anhanguera_monitor::store::{EnrollmentState, KnownInvoice, RecordBatch, Store, StoreError};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
+use tokio::net::TcpListener;
+
+const PASSWORD: &str = "hunter2";
 
 fn start() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-11-05T12:00:00Z")
@@ -169,6 +175,90 @@ async fn record_persists_keys_invoices_and_enrollments() {
         store.known_invoices("enrollment-1").await.expect("known"),
         vec![stored]
     );
+}
+
+#[tokio::test]
+async fn a_second_record_replaces_every_stored_column() {
+    let Some(db) = support::migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    let first = invoice("inv-1", 5, start());
+    let enrollment = |information_type: &str, at: DateTime<Utc>| {
+        (
+            "enrollment-1".to_owned(),
+            EnrollmentState {
+                information_type: Some(information_type.to_owned()),
+                last_payments_check_at: Some(at),
+            },
+        )
+    };
+    let batch = RecordBatch {
+        invoices: vec![first],
+        enrollments: vec![enrollment("PAYMENTS_ON_TIME", start())],
+        ..RecordBatch::default()
+    };
+    store.record(&batch).await.expect("record");
+    let later = start() + TimeDelta::days(3);
+    let replaced = KnownInvoice {
+        id: "inv-1".to_owned(),
+        course_enrollment_id: "enrollment-1".to_owned(),
+        due_date: NaiveDate::from_ymd_opt(2026, 12, 20).expect("date"),
+        status: "PAID".to_owned(),
+        first_seen_at: later,
+        lead_days: None,
+        announced: true,
+        closed_at: Some(later),
+        overdue_count: 3,
+        last_overdue_at: Some(later),
+    };
+    let update = RecordBatch {
+        invoices: vec![replaced.clone()],
+        enrollments: vec![enrollment("LATE_PAYMENTS", later)],
+        ..RecordBatch::default()
+    };
+
+    store.record(&update).await.expect("record again");
+
+    assert_eq!(
+        store.known_invoices("enrollment-1").await.expect("known"),
+        vec![replaced]
+    );
+    assert_eq!(
+        store.enrollment("enrollment-1").await.expect("enrollment"),
+        enrollment("LATE_PAYMENTS", later).1
+    );
+}
+
+#[tokio::test]
+async fn open_problems_come_back_in_signature_order() {
+    let Some(db) = support::migrated_database().await else {
+        return;
+    };
+    let store = initialized(&db.url).await;
+    for signature in ["b", "c", "a"] {
+        store
+            .open_problem(signature, "payments", start())
+            .await
+            .expect("open");
+    }
+    assert_eq!(store.open_problems().await.expect("open"), ["a", "b", "c"]);
+}
+
+#[tokio::test]
+async fn record_refuses_a_database_that_was_never_initialized() {
+    let Some(db) = support::migrated_database().await else {
+        return;
+    };
+    let store = Store::new(&db.url).expect("store");
+
+    let refused = store.record(&batch_of(vec![event("a")])).await;
+
+    assert!(
+        matches!(refused, Err(StoreError::NotInitialized)),
+        "{refused:?}"
+    );
+    assert!(store.events_after(0, 100).await.expect("events").is_empty());
 }
 
 #[tokio::test]
@@ -423,4 +513,185 @@ async fn test_databases_are_reached_over_tcp() {
         .await
         .expect("read the server address");
     assert!(row.get::<_, bool>(0));
+}
+
+fn everything_printed(error: &(dyn Error + 'static)) -> String {
+    let mut printed = format!("{error:?}");
+    let mut current = Some(error);
+    while let Some(error) = current {
+        printed.push('\n');
+        printed.push_str(&error.to_string());
+        current = error.source();
+    }
+    printed
+}
+
+fn assert_hides_the_login(error: &StoreError, url: &str) {
+    let printed = everything_printed(error);
+    assert!(!printed.contains(PASSWORD), "{printed}");
+    assert!(!printed.contains(url), "{printed}");
+}
+
+fn with_login(url: &str, login: &str) -> String {
+    let (scheme, rest) = url.split_once("://").expect("a postgres:// URL");
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let host_start = rest[..authority_end].rfind('@').map_or(0, |at| at + 1);
+    format!("{scheme}://{login}@{}", &rest[host_start..])
+}
+
+fn with_query(url: &str, parameter: &str) -> String {
+    let separator = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{separator}{parameter}")
+}
+
+#[test]
+fn invalid_url_never_echoes_the_address() {
+    let refused = [
+        ("host=db user=anhanguera dbname=anhanguera", "db"),
+        ("postgres://anhanguera:hunter2@h1,h2/anhanguera", "h1,h2"),
+        (
+            "postgres://anhanguera:hunter2@h1:5432,h2:5432/anhanguera",
+            "h1:5432",
+        ),
+        ("mysql://anhanguera:hunter2@db/anhanguera", "db"),
+        ("postgres://anhanguera:hunter2@[bad", "[bad"),
+        ("postgres://anhanguera:hunter2@/anhanguera", "anhanguera"),
+        ("postgres:///anhanguera?host=", "anhanguera"),
+        (
+            "postgres://anhanguera:hunter2@db.internal/anhanguera?sslmode=sometimes",
+            "db.internal",
+        ),
+        (
+            "postgres://anhanguera:hunter2@db.internal/anhanguera?sslpassword=x",
+            "db.internal",
+        ),
+        (
+            "postgres://anhanguera:hunter2@db.internal/anhanguera?Password=x",
+            "db.internal",
+        ),
+        (
+            "postgres://anhanguera@db.internal/anhanguera",
+            "db.internal",
+        ),
+        (
+            "postgres://anhanguera:@db.internal/anhanguera",
+            "db.internal",
+        ),
+        (
+            "postgres://anhanguera@db.internal/anhanguera?password=",
+            "db.internal",
+        ),
+        (
+            "postgres://anhanguera:hunter2@db.internal/anhanguera?channel_binding=require",
+            "db.internal",
+        ),
+        (
+            "postgres://anhanguera:hunter2@db.internal/anhanguera?sslnegotiation=direct",
+            "db.internal",
+        ),
+        (
+            "postgres://anhanguera:hunter2@db.internal/anhanguera?target_session_attrs=read-write",
+            "db.internal",
+        ),
+    ];
+    for (url, host) in refused {
+        let Err(error) = Store::new(url) else {
+            panic!("the store accepted {url}")
+        };
+        assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
+        assert_hides_the_login(&error, url);
+        let printed = everything_printed(&error);
+        assert!(!printed.contains(host), "{url}: {printed}");
+    }
+}
+
+#[tokio::test]
+async fn refused_connections_never_show_the_password() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    drop(listener);
+    let url = format!("postgres://anhanguera:{PASSWORD}@{address}/anhanguera");
+    let store = Store::new(&url).expect("store");
+
+    let started = Instant::now();
+    let error = store.device_id().await.expect_err("a closed port answered");
+    let elapsed = started.elapsed();
+
+    assert!(elapsed < Duration::from_secs(13), "took {elapsed:?}");
+    assert!(matches!(error, StoreError::Timeout(_)), "{error:?}");
+    assert_eq!(error.to_string(), "getting a database connection timed out");
+    assert_hides_the_login(&error, &url);
+    let printed = everything_printed(&error);
+    assert!(!printed.contains(&address.to_string()), "{printed}");
+}
+
+#[tokio::test]
+async fn rejected_logins_never_show_the_password() {
+    let Some(db) = support::database().await else {
+        return;
+    };
+    // The test cluster trusts every role it knows, so an unknown role is what it rejects.
+    let url = with_login(&db.url, &format!("intruder:{PASSWORD}"));
+    let store = Store::new(&url).expect("store");
+
+    let error = store
+        .device_id()
+        .await
+        .expect_err("an unknown role was let in");
+
+    assert!(matches!(error, StoreError::Database(_)), "{error:?}");
+    assert_hides_the_login(&error, &url);
+}
+
+#[tokio::test]
+async fn a_url_that_requires_tls_is_refused_at_once() {
+    let Some(db) = support::database().await else {
+        return;
+    };
+    let url = with_query(
+        &with_login(&db.url, &format!("anhanguera:{PASSWORD}")),
+        "sslmode=require",
+    );
+    let store = Store::new(&url).expect("store");
+
+    let started = Instant::now();
+    let error = store
+        .device_id()
+        .await
+        .expect_err("an address that requires TLS was let in");
+    let elapsed = started.elapsed();
+
+    assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+    assert!(matches!(error, StoreError::Database(_)), "{error:?}");
+    let printed = everything_printed(&error);
+    assert!(printed.contains("TLS"), "{printed}");
+    assert_hides_the_login(&error, &url);
+}
+
+#[tokio::test]
+async fn silent_servers_time_out_without_showing_the_address() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let address = listener.local_addr().expect("address");
+    let silent = tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    let url = format!("postgres://anhanguera:{PASSWORD}@{address}/anhanguera");
+    let store = Store::new(&url).expect("store");
+
+    let started = Instant::now();
+    let error = store
+        .device_id()
+        .await
+        .expect_err("a silent server answered");
+    let elapsed = started.elapsed();
+    silent.abort();
+
+    assert!(elapsed < Duration::from_secs(13), "took {elapsed:?}");
+    assert!(matches!(error, StoreError::Timeout(_)), "{error:?}");
+    assert_hides_the_login(&error, &url);
+    let printed = everything_printed(&error);
+    assert!(!printed.contains(&address.to_string()), "{printed}");
 }

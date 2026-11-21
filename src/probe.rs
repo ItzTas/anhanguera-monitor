@@ -16,7 +16,7 @@ use crate::config::{self, BillingDayNet, Config};
 use crate::dates::local_today;
 use crate::payments::learned_net_days;
 use crate::portal::CALENDAR_CATEGORIES;
-use crate::store::Store;
+use crate::store::{Store, StoreError};
 use crate::text::course_key;
 use crate::timestamp::system_clock;
 
@@ -352,9 +352,16 @@ fn load_config() -> Result<Config, String> {
         .map_err(|err| err.to_string())
 }
 
+fn refused_database(error: StoreError) -> String {
+    let StoreError::InvalidUrl(reason) = error else {
+        return NO_DATABASE.to_owned();
+    };
+    reason.to_owned()
+}
+
 async fn execute() -> Result<(Value, bool), String> {
     let config = load_config()?;
-    let store = Store::new(config.database_url.reveal()).map_err(|_| NO_DATABASE.to_owned())?;
+    let store = Store::new(config.database_url.reveal()).map_err(refused_database)?;
     let device_id = store
         .device_id()
         .await

@@ -246,3 +246,19 @@ async fn probe_exits_1_when_settings_are_missing() {
     assert_eq!(output.status.code(), Some(1));
     assert!(output.stdout.is_empty());
 }
+
+#[tokio::test]
+async fn a_database_url_without_a_password_is_named() {
+    let ava = FakeAva::start().await;
+    let env = probe_env("postgres://anhanguera@127.0.0.1:9/anhanguera", &ava.url());
+
+    let output = probe(env).await;
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr).trim(),
+        "DATABASE_URL has no password: add the role's password to the URL"
+    );
+    assert!(ava.requests().is_empty());
+}
