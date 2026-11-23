@@ -12,7 +12,7 @@ use crate::ava::{AvaClient, Credentials};
 use crate::config::Config;
 use crate::monitor::{Monitor, MonitorOptions};
 use crate::scheduler::Scheduler;
-use crate::server::AnhangueraPlugin;
+use crate::server::AnhangueraMonitor;
 use crate::store::{LOCK_LOST, Store, WriterLock, acquire_writer_lock};
 use crate::timestamp::system_clock;
 
@@ -121,11 +121,11 @@ async fn serve_until_stopped(started: Started) -> anyhow::Result<()> {
     let notifier = monitor.notifier().clone();
     notifier.events_recorded(newest_event);
     let scheduler = Scheduler::new(Arc::new(monitor));
-    let plugin =
-        AnhangueraPlugin::new(Arc::clone(&scheduler)).with_first_read_boundary(first_read_boundary);
+    let served = AnhangueraMonitor::new(Arc::clone(&scheduler))
+        .with_first_read_boundary(first_read_boundary);
     let cycles = tokio::spawn(scheduler.run());
     let ended = tokio::select! {
-        served = serve(plugin, notifier) => served.context("serving the plugin"),
+        outcome = serve(served, notifier) => outcome.context("serving the monitor"),
         () = lock.closed() => Err(lock_lost(&lock)),
     };
     cycles.abort();

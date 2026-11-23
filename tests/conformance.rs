@@ -6,7 +6,7 @@ use anhanguera_monitor::store::Store;
 use monitor_hub_sdk_testkit::conformance::{Conformance, Outcome, run};
 
 use support::fake_ava::FakeAva;
-use support::process::{SocketDir, plugin_env};
+use support::process::{SocketDir, monitor_env};
 use support::{migrated_database, utc};
 
 async fn seed_the_welcome(url: &str) {
@@ -21,7 +21,7 @@ async fn seed_the_welcome(url: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_plugin_conforms() {
+async fn the_monitor_conforms() {
     let Some(db) = migrated_database().await else {
         return;
     };
@@ -30,7 +30,7 @@ async fn the_plugin_conforms() {
     let sockets = SocketDir::create();
     let mut conformance = Conformance::new(env!("CARGO_BIN_EXE_anhanguera-monitor"));
     conformance.command.push("monitor".to_owned());
-    conformance.env = plugin_env(&db.url, &ava.url(), &sockets);
+    conformance.env = monitor_env(&db.url, &ava.url(), &sockets);
     conformance.min_events = 1;
     conformance.ready_timeout = Duration::from_secs(20);
 

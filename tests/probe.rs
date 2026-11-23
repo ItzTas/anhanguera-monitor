@@ -212,7 +212,7 @@ async fn probe_refuses_without_device_id() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8_lossy(&output.stderr).trim(),
-        "start the plugin once first"
+        "start the monitor once first"
     );
     assert!(ava.requests().is_empty());
 }

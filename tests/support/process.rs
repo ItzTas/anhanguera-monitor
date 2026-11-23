@@ -18,7 +18,7 @@ pub struct SocketDir {
     path: PathBuf,
 }
 
-pub struct RunningPlugin {
+pub struct RunningMonitor {
     child: Child,
     pub socket: PathBuf,
     stdout: Receiver<String>,
@@ -58,7 +58,7 @@ impl Drop for SocketDir {
     }
 }
 
-pub fn plugin_env(
+pub fn monitor_env(
     database_url: &str,
     graphql_url: &str,
     sockets: &SocketDir,
@@ -78,26 +78,26 @@ pub fn plugin_env(
     .collect()
 }
 
-pub fn spawn_plugin(env: &[(String, String)]) -> RunningPlugin {
+pub fn spawn_monitor(env: &[(String, String)]) -> RunningMonitor {
     let mut child = start(env);
     let stdout = read_first_line(child.stdout.take().expect("piped stdout"));
     let stderr = read_all(child.stderr.take().expect("piped stderr"));
-    let mut plugin = RunningPlugin {
+    let mut spawned = RunningMonitor {
         child,
         socket: PathBuf::new(),
         stdout,
         stderr,
     };
-    let Ok(line) = plugin.stdout.recv_timeout(HANDSHAKE_LIMIT) else {
-        plugin.fail("the plugin printed no handshake line within 30 seconds");
+    let Ok(line) = spawned.stdout.recv_timeout(HANDSHAKE_LIMIT) else {
+        spawned.fail("the monitor printed no handshake line within 30 seconds");
     };
     let Some(socket) = handshake_socket(&line) else {
-        plugin.fail(&format!(
+        spawned.fail(&format!(
             "the first stdout line is not a handshake: {line:?}"
         ));
     };
-    plugin.socket = socket;
-    plugin
+    spawned.socket = socket;
+    spawned
 }
 
 // Waits for the end of stderr, which comes when the process exits.
@@ -108,9 +108,9 @@ pub fn run_to_exit(env: &[(String, String)], limit: Duration) -> Exited {
     let Ok(stderr) = stderr.recv_timeout(limit) else {
         let _ = child.kill();
         let _ = child.wait();
-        panic!("the plugin did not exit within {limit:?}");
+        panic!("the monitor did not exit within {limit:?}");
     };
-    let status = child.wait().expect("wait for the plugin");
+    let status = child.wait().expect("wait for the monitor");
     let stdout = stdout
         .recv_timeout(PIPE_LIMIT)
         .unwrap_or_else(|_| "<the pipe stayed open>".to_owned());
@@ -131,7 +131,7 @@ fn start(env: &[(String, String)]) -> Child {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("start the plugin")
+        .expect("start the monitor")
 }
 
 pub fn require_sh() -> bool {
@@ -151,7 +151,7 @@ pub fn require_sh() -> bool {
     false
 }
 
-impl RunningPlugin {
+impl RunningMonitor {
     pub fn stop(&mut self) -> Exited {
         let sent = Command::new("sh")
             .args([
@@ -164,20 +164,20 @@ impl RunningPlugin {
             .expect("run kill");
         assert!(sent.success(), "kill -TERM failed: {sent}");
         let Ok(stderr) = self.stderr.recv_timeout(STOP_GRACE) else {
-            self.fail(&format!("the plugin did not stop within {STOP_GRACE:?}"));
+            self.fail(&format!("the monitor did not stop within {STOP_GRACE:?}"));
         };
         self.exited(stderr)
     }
 
     pub fn wait_exit(&mut self, limit: Duration) -> Exited {
         let Ok(stderr) = self.stderr.recv_timeout(limit) else {
-            self.fail(&format!("the plugin did not exit within {limit:?}"));
+            self.fail(&format!("the monitor did not exit within {limit:?}"));
         };
         self.exited(stderr)
     }
 
     fn exited(&mut self, stderr: String) -> Exited {
-        let status = self.child.wait().expect("wait for the plugin");
+        let status = self.child.wait().expect("wait for the monitor");
         let stdout = self
             .stdout
             .recv_timeout(PIPE_LIMIT)
@@ -196,11 +196,11 @@ impl RunningPlugin {
             .stderr
             .recv_timeout(PIPE_LIMIT)
             .unwrap_or_else(|_| "<the pipe stayed open>".to_owned());
-        panic!("{problem}\nplugin stderr:\n{stderr}");
+        panic!("{problem}\nmonitor stderr:\n{stderr}");
     }
 }
 
-impl Drop for RunningPlugin {
+impl Drop for RunningMonitor {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();

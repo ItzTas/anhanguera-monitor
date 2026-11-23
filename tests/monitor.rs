@@ -236,7 +236,7 @@ async fn coursework_problem_does_not_block_payments() {
     assert!(changed[0].urgent);
     assert_eq!(
         changed[0].title,
-        "The portal changed and the plugin needs a new version"
+        "The portal changed and the monitor needs a new version"
     );
     assert!(
         changed[0].body.contains("coursework"),

@@ -20,16 +20,16 @@ use crate::scheduler::{CycleState, Scheduler};
 use crate::store::{StoreError, StoredEvent};
 use crate::text::one_line;
 
-const PLUGIN_NAME: &str = "anhanguera";
+const MONITOR_NAME: &str = "anhanguera";
 const DISPLAY_NAME: &str = "Anhanguera";
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 500;
 const STATUS_QUERY_LIMIT: Duration = Duration::from_secs(10);
 const ALREADY_RUNNING: &str = "a check is already running";
 const HUB_AHEAD: &str =
-    "the hub is ahead of this database: reset the hub's position for this plugin";
+    "the hub is ahead of this database: reset the hub's position for this monitor";
 
-pub struct AnhangueraPlugin<P> {
+pub struct AnhangueraMonitor<P> {
     scheduler: Arc<Scheduler<P>>,
     first_read_boundary: Option<i64>,
     first_read_over: AtomicBool,
@@ -38,9 +38,9 @@ pub struct AnhangueraPlugin<P> {
     status_query_limit: Duration,
 }
 
-impl<P: Portal> AnhangueraPlugin<P> {
-    pub fn new(scheduler: Arc<Scheduler<P>>) -> AnhangueraPlugin<P> {
-        AnhangueraPlugin {
+impl<P: Portal> AnhangueraMonitor<P> {
+    pub fn new(scheduler: Arc<Scheduler<P>>) -> AnhangueraMonitor<P> {
+        AnhangueraMonitor {
             scheduler,
             first_read_boundary: None,
             first_read_over: AtomicBool::new(false),
@@ -50,7 +50,7 @@ impl<P: Portal> AnhangueraPlugin<P> {
         }
     }
 
-    pub fn with_first_read_boundary(mut self, boundary: i64) -> AnhangueraPlugin<P> {
+    pub fn with_first_read_boundary(mut self, boundary: i64) -> AnhangueraMonitor<P> {
         self.first_read_boundary = Some(boundary);
         self
     }
@@ -140,13 +140,13 @@ impl<P: Portal> AnhangueraPlugin<P> {
 }
 
 #[tonic::async_trait]
-impl<P: Portal> Monitor for AnhangueraPlugin<P> {
+impl<P: Portal> Monitor for AnhangueraMonitor<P> {
     async fn describe(
         &self,
         _: Request<DescribeRequest>,
     ) -> Result<Response<DescribeResponse>, Status> {
         Ok(Response::new(DescribeResponse {
-            name: PLUGIN_NAME.to_owned(),
+            name: MONITOR_NAME.to_owned(),
             display_name: DISPLAY_NAME.to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             kinds: Kind::ALL.into_iter().map(kind).collect(),
@@ -300,7 +300,7 @@ mod tests {
     use tokio::runtime::{Builder, Runtime};
     use tonic::Request;
 
-    use super::{AnhangueraPlugin, HUB_AHEAD, STATUS_QUERY_LIMIT, state_and_message};
+    use super::{AnhangueraMonitor, HUB_AHEAD, STATUS_QUERY_LIMIT, state_and_message};
     use crate::ava::AvaError;
     use crate::ava::model::{CalendarEvent, CourseEnrollment, InvoiceHome, Quiz, Subject};
     use crate::config::BillingDayNet;
@@ -359,7 +359,7 @@ mod tests {
             .expect("runtime")
     }
 
-    fn plugin(url: &str) -> AnhangueraPlugin<SilentPortal> {
+    fn served(url: &str) -> AnhangueraMonitor<SilentPortal> {
         let now = DateTime::parse_from_rfc3339("2026-12-01T15:00:00Z")
             .expect("timestamp")
             .to_utc();
@@ -385,7 +385,7 @@ mod tests {
             clock: Arc::new(move || now),
         };
         let monitor = Monitor::new(Store::new(url).expect("store"), SilentPortal, options);
-        AnhangueraPlugin::new(Scheduler::new(Arc::new(monitor)))
+        AnhangueraMonitor::new(Scheduler::new(Arc::new(monitor)))
     }
 
     async fn migrate(url: &str) {
@@ -435,10 +435,10 @@ mod tests {
             return;
         };
         runtime.block_on(migrate(&db.url));
-        let plugin = plugin(&db.url);
-        let store = plugin.scheduler.monitor().store();
+        let served = served(&db.url);
+        let store = served.scheduler.monitor().store();
         runtime
-            .block_on(plugin.scheduler.monitor().prepare("device-1".to_owned()))
+            .block_on(served.scheduler.monitor().prepare("device-1".to_owned()))
             .expect("prepare");
         let newest = runtime.block_on(store.last_issued_seq()).expect("newest");
         let ahead = newest + 5;
@@ -449,7 +449,7 @@ mod tests {
                     after: ahead,
                     limit: 0,
                 });
-                let page = runtime.block_on(plugin.events(request)).expect("events");
+                let page = runtime.block_on(served.events(request)).expect("events");
                 assert!(page.into_inner().events.is_empty());
             }
         });
@@ -475,18 +475,18 @@ mod tests {
                 held.push(socket);
             }
         });
-        let mut plugin = plugin(&format!(
+        let mut served = served(&format!(
             "postgres://anhanguera:hunter2@{address}/anhanguera"
         ));
-        assert_eq!(plugin.status_query_limit, STATUS_QUERY_LIMIT);
+        assert_eq!(served.status_query_limit, STATUS_QUERY_LIMIT);
         assert_eq!(STATUS_QUERY_LIMIT, Duration::from_secs(10));
         let limit = Duration::from_millis(300);
-        plugin.status_query_limit = limit;
+        served.status_query_limit = limit;
 
         let started = Instant::now();
         let answered = tokio::time::timeout(
             Duration::from_secs(3),
-            plugin.status(Request::new(StatusRequest {})),
+            served.status(Request::new(StatusRequest {})),
         )
         .await;
         let elapsed = started.elapsed();

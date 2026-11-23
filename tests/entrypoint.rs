@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio_postgres::Client;
 
 use support::fake_ava::FakeAva;
-use support::process::{SocketDir, plugin_env, require_sh, run_to_exit, spawn_plugin};
+use support::process::{SocketDir, monitor_env, require_sh, run_to_exit, spawn_monitor};
 use support::schema::table_names;
 use support::{admin, database, end_the_writer_locks_connection};
 
@@ -86,12 +86,12 @@ async fn second_process_refuses_to_start() {
     };
     let (first_portal, second_portal) = tokio::join!(FakeAva::quiet(), FakeAva::start());
     let (first_sockets, second_sockets) = (SocketDir::create(), SocketDir::create());
-    let mut first = spawn_plugin(&plugin_env(&db.url, &first_portal.url(), &first_sockets));
+    let mut first = spawn_monitor(&monitor_env(&db.url, &first_portal.url(), &first_sockets));
     let client = admin(&db.url).await;
     let before = texts(&client, RECORDED_VERSIONS).await;
 
     let second = run_to_exit(
-        &plugin_env(&db.url, &second_portal.url(), &second_sockets),
+        &monitor_env(&db.url, &second_portal.url(), &second_sockets),
         EXIT_LIMIT,
     );
 
@@ -115,10 +115,10 @@ async fn losing_the_database_lock_exits_1() {
     };
     let portal = FakeAva::quiet().await;
     let sockets = SocketDir::create();
-    let mut plugin = spawn_plugin(&plugin_env(&db.url, &portal.url(), &sockets));
+    let mut spawned = spawn_monitor(&monitor_env(&db.url, &portal.url(), &sockets));
 
     end_the_writer_locks_connection(&admin(&db.url).await).await;
-    let exited = plugin.wait_exit(Duration::from_secs(5));
+    let exited = spawned.wait_exit(Duration::from_secs(5));
 
     assert_eq!(exited.status.code(), Some(1), "{}", exited.stderr);
     let error = the_fatal_error(&exited.stderr);
@@ -148,7 +148,7 @@ async fn a_url_without_a_password_stops_the_start_before_pgpass_is_read() {
     fs::write(&pgpass, format!("*:*:*:{PGPASS_LINE}\n")).expect("write the pgpass file");
     fs::set_permissions(&pgpass, fs::Permissions::from_mode(0o600))
         .expect("make the pgpass file private");
-    let mut env = plugin_env(url.as_str(), &portal.url(), &sockets);
+    let mut env = monitor_env(url.as_str(), &portal.url(), &sockets);
     env.push(("PGPASSFILE".to_owned(), pgpass));
 
     let exited = run_to_exit(&env, EXIT_LIMIT);

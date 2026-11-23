@@ -20,7 +20,7 @@ fn main() -> ExitCode {
         return anhanguera_monitor::probe::run();
     }
     if arguments == ["monitor"] && launched_by_hub() {
-        return run_plugin();
+        return run_monitor();
     }
     eprintln!("{NOT_LAUNCHED_BY_HUB}");
     ExitCode::FAILURE
@@ -50,7 +50,7 @@ fn validate_settings() -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn run_plugin() -> ExitCode {
+fn run_monitor() -> ExitCode {
     let config = match Config::load() {
         Ok(config) => config,
         Err(err) => {

@@ -839,7 +839,7 @@ fn site_changed_event(
     urgent_event(
         Kind::SiteChanged,
         format!("site-changed:{signature}:{today}"),
-        "The portal changed and the plugin needs a new version".to_owned(),
+        "The portal changed and the monitor needs a new version".to_owned(),
         format!(
             "Area: {}\nOperation: {}\nField: {}",
             area.label,
@@ -865,7 +865,7 @@ fn login_failed_event(since: DateTime<Utc>, now: DateTime<Utc>) -> NewEvent {
         Kind::LoginFailed,
         format!("login-failed:{}", instant(since)),
         "The portal rejected the password".to_owned(),
-        "The plugin waits 6 hours before trying again. Check the AVA password in the hub settings."
+        "The monitor waits 6 hours before trying again. Check the AVA password in the hub settings."
             .to_owned(),
         now,
     )

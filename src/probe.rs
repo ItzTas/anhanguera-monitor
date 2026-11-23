@@ -31,7 +31,7 @@ const ENUM_KEYS: [&str; 6] = [
 const DATE_PREFIXES: [&str; 2] = ["dddd-dd-dd", "dd/dd/dddd"];
 const OK: &str = "ok";
 const ENV_PREFIX: &str = "ANHANGUERA__";
-const NO_STATE: &str = "start the plugin once first";
+const NO_STATE: &str = "start the monitor once first";
 const NO_DATABASE: &str = "cannot reach the database";
 
 pub fn shape(value: &Value) -> Value {

@@ -15,7 +15,7 @@ use tonic::{Request, Streaming};
 use tonic_prost::ProstCodec;
 
 use support::fake_ava::FakeAva;
-use support::process::{SocketDir, plugin_env, require_sh, spawn_plugin};
+use support::process::{SocketDir, monitor_env, require_sh, spawn_monitor};
 use support::schema::{goose_era_database, seed_rows};
 
 const OPEN_INVOICES: &str = include_str!("../testdata/ava/Invoices.open.json");
@@ -26,7 +26,7 @@ async fn grpc(socket: &Path) -> Grpc<Channel> {
         .expect("a socket endpoint")
         .connect()
         .await
-        .expect("connect to the plugin");
+        .expect("connect to the monitor");
     let mut grpc = Grpc::new(channel);
     grpc.ready().await.expect("the channel is ready");
     grpc
@@ -100,13 +100,13 @@ async fn an_open_invoice_reaches_the_hub_through_watch_and_events() {
     let open: Value = serde_json::from_str(OPEN_INVOICES).expect("the fixture is JSON");
     ava.set("Invoices", 200, open);
     let sockets = SocketDir::create();
-    let mut plugin = spawn_plugin(&plugin_env(&db.url, &ava.url(), &sockets));
+    let mut spawned = spawn_monitor(&monitor_env(&db.url, &ava.url(), &sockets));
 
-    let mut stream = watch(&plugin.socket).await;
-    let baseline = events(&plugin.socket, 0).await;
+    let mut stream = watch(&spawned.socket).await;
+    let baseline = events(&spawned.socket, 0).await;
     let deadline = Instant::now() + DELIVERY_LIMIT;
-    let delivered = events_once_invoiced(&plugin.socket, &mut stream, deadline).await;
-    let exited = plugin.stop();
+    let delivered = events_once_invoiced(&spawned.socket, &mut stream, deadline).await;
+    let exited = spawned.stop();
 
     assert!(baseline.is_empty(), "{baseline:?}");
     assert!(of_kind(&delivered, "welcome").is_some(), "{delivered:?}");
@@ -142,14 +142,14 @@ async fn a_database_left_by_0_1_keeps_its_events_device_and_positions() {
         .get(0);
     let ava = FakeAva::quiet().await;
     let sockets = SocketDir::create();
-    let mut plugin = spawn_plugin(&plugin_env(&db.url, &ava.url(), &sockets));
+    let mut spawned = spawn_monitor(&monitor_env(&db.url, &ava.url(), &sockets));
 
-    let listed: Vec<(i64, String)> = events(&plugin.socket, 0)
+    let listed: Vec<(i64, String)> = events(&spawned.socket, 0)
         .await
         .into_iter()
         .map(|event| (event.seq, event.id))
         .collect();
-    let exited = plugin.stop();
+    let exited = spawned.stop();
 
     assert_eq!(listed, seeded);
     assert_eq!(exited.status.code(), Some(0), "{}", exited.stderr);
