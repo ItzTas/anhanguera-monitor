@@ -12,7 +12,7 @@ use anhanguera_monitor::store::Store;
 use tokio::time::{Instant, sleep};
 
 use support::fake_portal::FakePortal;
-use support::{MovableClock, migrated_database, utc};
+use support::{MovableClock, migrated_database, next_signal, utc};
 
 const PATIENCE: Duration = Duration::from_secs(5);
 
@@ -38,6 +38,28 @@ async fn eventually(what: &str, condition: impl Fn() -> bool) {
     }
 }
 
+async fn prepared(
+    url: &str,
+    portal: &FakePortal,
+    clock: &MovableClock,
+) -> Arc<Scheduler<FakePortal>> {
+    portal.set_enrollments(Ok(vec![CourseEnrollment {
+        id: "enrollment-1".to_owned(),
+        status: "ACTIVE".to_owned(),
+        course_name: "Direito".to_owned(),
+    }]));
+    let monitor = Monitor::new(
+        Store::new(url).expect("store"),
+        portal.clone(),
+        options(clock),
+    );
+    monitor
+        .prepare("device-1".to_owned())
+        .await
+        .expect("prepare");
+    Scheduler::new(Arc::new(monitor))
+}
+
 #[tokio::test]
 async fn the_first_cycle_runs_at_start_and_a_trigger_runs_the_next() {
     let Some(db) = migrated_database().await else {
@@ -45,21 +67,7 @@ async fn the_first_cycle_runs_at_start_and_a_trigger_runs_the_next() {
     };
     let clock = MovableClock::starting_at(utc("2026-12-01T15:00:00Z"));
     let portal = FakePortal::new();
-    portal.set_enrollments(Ok(vec![CourseEnrollment {
-        id: "enrollment-1".to_owned(),
-        status: "ACTIVE".to_owned(),
-        course_name: "Direito".to_owned(),
-    }]));
-    let monitor = Monitor::new(
-        Store::new(&db.url).expect("store"),
-        portal.clone(),
-        options(&clock),
-    );
-    monitor
-        .prepare("device-1".to_owned())
-        .await
-        .expect("prepare");
-    let scheduler = Scheduler::new(Arc::new(monitor));
+    let scheduler = prepared(&db.url, &portal, &clock).await;
     let cycles = || {
         portal
             .calls()
@@ -88,4 +96,31 @@ async fn the_first_cycle_runs_at_start_and_a_trigger_runs_the_next() {
     })
     .await;
     running.abort();
+}
+
+#[tokio::test]
+async fn a_cycle_signals_when_it_starts_and_when_it_ends() {
+    let Some(db) = migrated_database().await else {
+        return;
+    };
+    let clock = MovableClock::starting_at(utc("2026-12-01T15:00:00Z"));
+    let portal = FakePortal::new();
+    let scheduler = prepared(&db.url, &portal, &clock).await;
+    portal.gated();
+    let mut signals = scheduler.monitor().notifier().subscribe();
+    let seq = signals.latest_seq();
+
+    let running = tokio::spawn(Arc::clone(&scheduler).run());
+
+    assert_eq!(next_signal(&mut signals).await, seq);
+    let started = scheduler.state();
+    portal.open_gate();
+    assert_eq!(next_signal(&mut signals).await, seq);
+    let ended = scheduler.state();
+    running.abort();
+
+    assert!(started.running, "{started:?}");
+    assert!(!ended.running, "{ended:?}");
+    assert_eq!(ended.last_finished, Some(clock.now()));
+    assert_eq!(ended.problem, None);
 }

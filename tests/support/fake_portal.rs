@@ -7,6 +7,7 @@ use anhanguera_monitor::ava::model::{
 };
 use anhanguera_monitor::portal::Portal;
 use chrono::{DateTime, NaiveDate, Utc};
+use tokio::sync::Notify;
 
 type Answer<T> = Result<T, AvaError>;
 
@@ -24,6 +25,7 @@ struct State {
     quizzes: HashMap<String, Answer<Vec<Quiz>>>,
     calendar: HashMap<String, Answer<Vec<CalendarEvent>>>,
     backoff_until: Option<DateTime<Utc>>,
+    gate: Option<Arc<Notify>>,
     calls: Vec<String>,
 }
 
@@ -38,6 +40,7 @@ impl Default for State {
             quizzes: HashMap::new(),
             calendar: HashMap::new(),
             backoff_until: None,
+            gate: None,
             calls: Vec::new(),
         }
     }
@@ -88,6 +91,17 @@ impl FakePortal {
         self.state().backoff_until = until;
     }
 
+    // Holds the next student_id call, the first portal call of a cycle, until open_gate.
+    pub fn gated(&self) {
+        self.state().gate = Some(Arc::new(Notify::new()));
+    }
+
+    pub fn open_gate(&self) {
+        if let Some(gate) = self.state().gate.take() {
+            gate.notify_one();
+        }
+    }
+
     pub fn calls(&self) -> Vec<String> {
         self.state().calls.clone()
     }
@@ -126,6 +140,10 @@ pub fn quiet_home() -> InvoiceHome {
 
 impl Portal for FakePortal {
     async fn student_id(&self) -> Result<String, AvaError> {
+        let gate = self.state().gate.clone();
+        if let Some(gate) = gate {
+            gate.notified().await;
+        }
         self.answer("student_id".to_owned(), |state| Some(&state.student_id))
     }
 
