@@ -3,6 +3,7 @@ use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
+use monitor_hub_sdk::StatusScope;
 use tokio::sync::Notify;
 use tokio::task::{AbortHandle, JoinError};
 use tracing::error;
@@ -45,11 +46,15 @@ impl<P: Portal> Scheduler<P> {
 
     pub async fn run(self: Arc<Self>) {
         loop {
-            self.begin();
-            let outcome = self.cycle().await;
-            self.finish(outcome);
+            self.run_once().await;
             self.wait_for_next().await;
         }
+    }
+
+    async fn run_once(&self) {
+        let cycle = self.begin();
+        let outcome = self.cycle().await;
+        self.finish(outcome, cycle);
     }
 
     pub fn trigger(&self) -> bool {
@@ -69,12 +74,12 @@ impl<P: Portal> Scheduler<P> {
         &self.monitor
     }
 
-    fn begin(&self) {
+    fn begin(&self) -> StatusScope {
         let mut state = self.lock_state();
         state.running = true;
         state.last_started = Some(self.monitor.now());
         let _served_by_this_cycle = pin!(self.wake.notified()).enable();
-        self.monitor.notifier().status_changed();
+        self.monitor.notifier().status_scope()
     }
 
     async fn cycle(&self) -> CycleOutcome {
@@ -84,7 +89,8 @@ impl<P: Portal> Scheduler<P> {
         cycle.await.unwrap_or_else(crashed)
     }
 
-    fn finish(&self, outcome: CycleOutcome) {
+    // The scope drops when this returns, after the state is written and the lock released.
+    fn finish(&self, outcome: CycleOutcome, _cycle: StatusScope) {
         let mut state = self.lock_state();
         state.running = false;
         state.last_finished = Some(self.monitor.now());
@@ -92,7 +98,6 @@ impl<P: Portal> Scheduler<P> {
             CycleOutcome::Completed => None,
             CycleOutcome::Incomplete(problem) => Some(problem),
         };
-        self.monitor.notifier().status_changed();
     }
 
     async fn wait_for_next(&self) {
