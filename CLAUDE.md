@@ -74,16 +74,24 @@ Some tests need tools from outside the crate. When one is missing they print a `
 on stderr and return. When `CI` is set and not empty they panic instead, so CI never passes by
 skipping.
 
-- Postgres: the SDK test kit's `database()` gives each test its own database. It uses
+- Postgres: `tests/support/postgres.rs`'s `database()` gives each test its own database. It uses
   `TEST_DATABASE_URL` when set (the compose Postgres works, see `.env.example`), and otherwise
-  starts a throwaway cluster with `initdb` and `postgres` from `PATH`.
-  `tests/support::migrated_database` adds the migrations.
+  starts a throwaway cluster with `initdb` and `postgres` from `PATH`, listening on a local TCP
+  port. `TEST_DATABASE_URL` must be a `postgres://` URL with a password, like `DATABASE_URL`, and
+  its role must be able to create databases. The throwaway cluster trusts every login, so its URL
+  carries a password that Postgres ignores. `tests/support::migrated_database` adds the migrations.
+- `tests/migration.rs` builds databases the way goose did (versions 1 and 2, above 2, with a gap,
+  with an empty `goose_db_version`) and checks that the first migration adopts them without
+  losing a row, and that the second drops `goose_db_version`.
 - `sh` with `kill` for the tests that start the binary and signal it.
 - The conformance command for `tests/conformance.rs`: the binary named by `PLUGIN_CONFORMANCE`,
   or else `go install` of `plugin-conformance` at the SDK's Go tag `sdk-go/v0.4.0`, cached under
   `~/.cache/monitor-hub/plugin-conformance/`.
 - The portal is a fake GraphQL server (`tests/support/fake_ava.rs`) that serves the fictitious
   answers in `testdata/ava/`. Cycle tests use a fake `Portal` (`tests/support/fake_portal.rs`).
+
+The binary of `tests/store.rs` takes about 33 s, because two tests pause a TCP proxy
+(`tests/support/proxy.rs`) and wait for the lock's 30 s loss limit to run out.
 
 The SDK refuses Unix socket paths longer than 100 bytes, so a long `TMPDIR` breaks the tests that
 start the plugin. Run them with a short one (`TMPDIR=/tmp`). The same holds under the hub, where
@@ -115,7 +123,7 @@ except `AVA_GRAPHQL_URL`, which only the tests set. The password is set by `AVA_
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DATABASE_URL` / `DATABASE_URL_FILE` | required, secret | Postgres address, connected without TLS. |
+| `DATABASE_URL` / `DATABASE_URL_FILE` | required, secret | Postgres address with the role's password, connected without TLS. See below. |
 | `AVA_USERNAME` | required, secret | The student's CPF. Dots, dashes and spaces are ignored; it must be 11 digits. |
 | `AVA_PASSWORD` / `AVA_PASSWORD_FILE` | exactly one, secret | The portal password. The file variant is not editable from the hub. |
 | `COURSES` | required | Names of the courses to watch for coursework. Matching ignores case, accents and repeated whitespace. |
@@ -132,6 +140,43 @@ except `AVA_GRAPHQL_URL`, which only the tests set. The password is set by `AVA_
 | `LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn` or `error`. |
 | `AVA_GRAPHQL_URL` | the portal's endpoint | Tests only. Not editable from the hub. |
 
+`DATABASE_URL` is `postgres://user:password@host:port/database?sslmode=disable` (`postgresql://`
+works too). Put the host, port, user, password and database in the URL.
+
+- The password goes in the address or in a `password` query key. A URL without one, or with an
+  empty one, is refused with `DATABASE_URL has no password: add the role's password to the URL`.
+  Without a password in the URL, sqlx would read `PGPASSWORD`, `PGPASSFILE` or `~/.pgpass`, and it
+  logs a malformed `.pgpass` line whole at `warn`. A line missing a field, such as `*:*:*:secret`,
+  puts the password where sqlx expects the user name, so the log would show it. With the refusal in
+  place, the monitor never uses `PGPASSWORD` and never reads a `.pgpass` file. A database that
+  trusts the role still needs a password in the URL, and Postgres ignores it.
+- Whatever else the URL leaves out, sqlx takes from the `PG*` variables (`PGPORT`, `PGUSER`,
+  `PGDATABASE`, `PGOPTIONS`, `PGSSLMODE` and the rest), then the user from the system account.
+  Under the hub the `PG*` variables only arrive when set as `ANHANGUERA__PG*`.
+- The monitor connects without TLS. `sslmode=disable`, `allow` and `prefer` connect in plain text.
+  `require`, `verify-ca` and `verify-full` fail at once, with sqlx's message that it was built
+  without TLS support.
+- These are refused with `DATABASE_URL is not a valid Postgres address`, which never repeats the
+  address: the key=value form (`host=db user=anhanguera`), several hosts (`h1,h2`), a URL with no
+  host (unless a `host` or `hostaddr` query key names one), any scheme other than the two above,
+  and any query key the monitor does not know. sqlx would log an unknown key together with its
+  value, and that value can be a secret (`sslpassword`, a misspelled `Password`). Key names are
+  case sensitive.
+- The monitor passes on the query keys sqlx reads: `sslmode`, `options`, `application_name`,
+  `host`, `hostaddr`, `port`, `dbname`, `user`, `password`, the certificate keys (`sslrootcert`,
+  `sslcert`, `sslkey` and their dashed forms) and `statement-cache-capacity`.
+- It accepts and ignores the libpq keys that 0.1.0 took and sqlx has no equivalent for:
+  `connect_timeout`, `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`,
+  `keepalives_retries` and `load_balance_hosts`, plus `channel_binding=disable` or `prefer`,
+  `sslnegotiation=postgres` and `target_session_attrs=any`. Any other value of those last three
+  stops the start with a message that names the key and never its value: `DATABASE_URL's
+  channel_binding needs TLS, and the monitor connects without TLS`, the same for `sslnegotiation`,
+  and `DATABASE_URL's target_session_attrs needs a session check the monitor does not run`.
+- An IPv6 host goes in brackets: `postgres://user:password@[::1]:5432/database`.
+- A refused address stops the start with one `fatal` line, for example `acquiring the database
+  writer lock: DATABASE_URL has no password: add the role's password to the URL`. The `probe`
+  command prints the same text on stderr and exits 1.
+
 The hub also passes `PATH`, `TZ`, `TMPDIR` and `MONITOR_HUB_DATA_DIR`. The monitor ignores `TZ`
 and keeps all its state in Postgres. `anhanguera-monitor validate-settings` checks the
 environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when there are none.
@@ -142,15 +187,27 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   binary prints the SDK's `NOT_LAUNCHED_BY_HUB` text on stderr and exits 1. `probe` and
   `validate-settings` are the two commands that run without the hub.
 - Stdout carries only the handshake line. Logs go to stderr as JSON lines.
-- Start-up takes the database writer lock, applies the migrations, opens the pool, reads the newest
-  issued `seq` and the newest stored event, and creates the state row with the device id, all
-  before the handshake. Each connection attempt has 10 s, and the whole sequence has 45 s, because
-  the hub kills a plugin that has not answered in 60 s. Start-up does not call the portal.
+- Start-up takes the database writer lock, applies the migrations with `sea-orm-migration` on the
+  lock's connection, opens the pool, reads the newest issued `seq` and the newest stored event, and
+  creates the state row with the device id, all before the handshake. Each connection attempt has
+  10 s, and sqlx retries a refused connection within them. The whole sequence has 45 s, because the
+  hub kills a plugin that has not answered in 60 s. Start-up does not call the portal, so nothing
+  of it logs in. Against a database that refuses connections the start ends after about 10 s with
+  `acquiring the database writer lock: connecting to the database for the writer lock timed out`
+  (0.1.0 failed at once). The longest stall after the lock's connection drops ends the process
+  after about 30 s. Both stay under the 45 s start-up limit and the 60 s the hub allows.
 - Exit code 0 means a clean stop (SIGTERM or SIGINT), with no `fatal` line. When the monitor exits
   1 because of a failed start-up step or a lost database lock, it writes exactly one JSON `fatal`
   line at `error` level, whose `error` field names the step (for example `acquiring the database
-  writer lock: ...`) or starts with `the database lock was lost`. A configuration error prints its
-  message on stderr and exits 1. The hub restarts the plugin with a backoff.
+  writer lock: ...`) or starts with `the database lock was lost: the lock's connection`. A
+  configuration error prints its message on stderr and exits 1. The hub restarts the plugin with
+  a backoff.
+- A query on the lock's connection every 0.5 s, with 30 s to answer, notices a lost lock (see
+  Persistence). It reads `pg_locks` and checks that this connection still holds the lock. The
+  reason after `the database lock was lost: ` is `the lock's connection failed: ...`, `the lock's
+  connection did not answer within 30s` or `the lock's connection was replaced`. A lock lost
+  before the migrations stops the start the same way, under the step `applying the database
+  migrations`, and nothing is migrated.
 - A second process on the same database cannot take the writer lock and migrates nothing.
 - `Describe` names the plugin `anhanguera` with these event kinds: `welcome`, `invoice_open`,
   `payment_due`, `payment_overdue`, `invoice_closed`, `payment_attention`,
@@ -165,8 +222,12 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   with `a check is already running`.
 - The monitor serves `Watch` through the SDK's `serve_with_notifier`. It signals at start with the
   newest stored `seq`, after each committed batch of events, when a cycle starts and ends, when the
-  hub-ahead state changes, and when the first read ends. A signal never makes the monitor call the
-  portal. Signals carry the `seq` of a stored event, never the sequence's own value.
+  hub-ahead state changes, and when the first read ends. The signal of a batch comes from
+  `Store::record`, right after the commit and with the highest new `seq` of the batch, so a failed
+  commit, or a batch without a new event, signals nothing. The welcome event has no signal of its
+  own: the signal at start and the one at the end of the first read cover it. A signal never makes
+  the monitor call the portal. Signals carry the `seq` of a stored event, never the sequence's own
+  value.
 - `Events(after, limit)` returns the events with a `seq` above `after`, in order. A `limit` of 0
   means 100, and the maximum is 500. Each call acknowledges every event up to `after`, and writes
   the state row only when that position moves forward.
@@ -178,7 +239,13 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   cycle recorded events and before the hub's first read finished, the new process counts those
   events as history.
 - When the database is down, `Events` answers `UNAVAILABLE` and `Status` answers `FAILING`, both
-  with `the database is unavailable`, without the address or the password.
+  with `the database is unavailable`, without the address or the password. Against a database that
+  refuses connections, sqlx keeps retrying for the 10 s allowed to get a connection, so `Events`
+  and `Status` take up to 10 s to answer, under the hub's 30 s limit per call. A cycle then takes
+  about 40 s, because the state reads and writes it makes one after another (sent keys, the
+  payments streak, the open problems and the pruning) each wait those 10 s. Its failure (`the
+  cycle: the database is unavailable; payments: the database is unavailable`) shows in `Status`
+  about 40 s after the cycle starts, and `Status` answers `CHECKING` until then.
 - When `the hub is ahead of this database: reset the hub's position for this plugin` appears at
   `error` level, the hub asked for events after a `seq` this database never issued: the database
   was reset or replaced and the hub's stored position was not. `Events` returns nothing until the
@@ -247,20 +314,127 @@ Settled ones are `PAID`, `CANCELLED`, `REFUNDED`, `WROTE_OFF` and `OVERPAID`.
 
 ## Persistence
 
-- A schema change is a new file `sql/schema/0000N_name.sql` in goose format (`-- +goose Up` and
-  `-- +goose Down`) and a new entry in `MIGRATIONS` in `src/store.rs`. **Never edit a migration
-  that already exists.** The SDK's `migrate::up` applies them on the writer lock's connection.
+- The monitor reaches Postgres through SeaORM on sqlx. The entities are in `src/store/entity/`, one
+  per table. The migrations are `sea-orm-migration` modules in `src/migration/`, run in the order
+  of `Migrator::migrations`, and `seaql_migrations` records the ones applied.
+- The first migration, `m20261120_000001_goose_schema`, adopts the schema that goose built for
+  0.1.0. It reads `goose_db_version` in the current schema and runs the Up section of each
+  `sql/schema/` file that table has not recorded. A database without the table is new and gets
+  every file. It refuses a gap (`migration version 1 is not applied but the database is already at
+  version 2`) and a table with no rows (`goose_db_version has no rows, not even the version 0 row
+  goose expects`), accepts versions above 2, and never writes a goose row.
+- The second, `m20261120_000002_drop_goose_db_version`, drops `goose_db_version` from that same
+  schema, qualified by the schema and without `CASCADE`. If another object depends on the table,
+  the drop fails, nothing is dropped, and start-up stops with Postgres's error. The device id and
+  every row pass through the two migrations unchanged.
+- **Upgrading from 0.1.0.** The first start of this version creates `seaql_migrations` and drops
+  `goose_db_version`. The monitor's role therefore needs `CREATE` on the current schema and must
+  own `goose_db_version`, which 0.1.0 never needed after its own first start. Without `CREATE` the
+  start fails with `applying the database migrations: Execution Error: error returned from
+  database: permission denied for schema public`, and without ownership with `... must be owner of
+  table goose_db_version`. Either way it changes nothing, but under the hub it becomes a restart
+  loop, and no try gets as far as calling the portal. Before the first start, run these as the
+  monitor's role:
+
+  ```sql
+  SELECT has_schema_privilege(current_user, current_schema(), 'CREATE');
+  SELECT tablename, tableowner FROM pg_tables
+  WHERE schemaname = current_schema() AND tablename = 'goose_db_version';
+  ```
+
+  The first must return `t`, and the second must list the table with the monitor's role as
+  `tableowner`. Later starts need the rights 0.1.0 needed on the tables and on `events_seq_seq`,
+  and `SELECT` on `seaql_migrations`. Without that table's rights the start reads the migrations
+  as pending, tries to create the table and fails with the same `permission denied for schema
+  public`, which points at the wrong right. It happens when another role ran the first start:
+  grant it. Take a `pg_dump` of the database before the first start, because there is no way back.
+- 0.1.0 no longer runs on a database that went through the migrations. Started on one, it exits 1
+  with `applying the database migrations: migration 00001_init.sql failed: db error: ERROR:
+  relation "monitor_state" already exists` and changes no data. It does leave a new
+  `goose_db_version` table with one version-0 row, which this version ignores and never drops,
+  because the drop migration is already recorded. Drop it by hand.
+- A schema change is a new module in `src/migration/` and a new entry at the end of
+  `Migrator::migrations`. **Never edit a migration that already exists, nor the files in
+  `sql/schema/`**: they are the first migration's input.
+- Start-up runs the migrations on the writer lock's connection, in one transaction that first
+  checks that the connection still holds the lock. The monitor reads the pending migrations
+  without creating `seaql_migrations`, and sends DDL only when one is pending, so a role with
+  table rights only still starts once nothing is pending. Each migration's own transaction
+  becomes a savepoint inside the lock's, and a run that fails records nothing. No migration can
+  leave that transaction, so a statement Postgres refuses inside a transaction block, such as
+  `CREATE INDEX CONCURRENTLY`, cannot be a migration: it makes start-up fail.
+- The SQL lives in the store (`src/store.rs` and `src/store/`) and in the migrations
+  (`src/migration/`, which reads `sql/schema/`). Most queries go through the entities. These keep
+  raw SQL, the same text as before SeaORM: `LOCK_STATE`, `INSERT_SENT_KEY`, `PAYMENTS_FAILED`,
+  `LAST_ISSUED_SEQ`, `NEWEST_SEQ`, `PRUNE_EVENTS` and `PRUNE_SENT_KEYS`. Every transaction that
+  inserts an event locks the state row first, so the order of `seq` values is the order of the
+  commits.
+- `Store::record` signals the hub with the new event's `seq` right after the commit that inserted
+  it, never before. A failed commit, or a record without a new event, signals nothing.
+  `Store::initialize` writes the welcome event without a signal.
 - Tables: `monitor_state` (one row: device id, acknowledged `seq`, last payments success, the
   payments failure streak start, whether `monitor_blind` went out), `events` (`seq` from a
   `BIGSERIAL`, a unique `id`), `sent_keys`, `invoices` (one row per enrollment and invoice id, so
   an invoice listed under two enrollments keeps two rows: due date, status, first seen, learned lead
   days, overdue repeat bookkeeping), `enrollments` (last `informationType`, last payments check) and
   `problems` (open `site_changed` signatures). The password and the token are never stored.
-- All SQL lives in `src/store.rs`. Every transaction that inserts an event locks the state row
-  first, so the order of `seq` values is the order of the commits.
-- Pool connections run with a 20 s `statement_timeout`, a 5 s `lock_timeout`, TCP keepalives and a
-  60 s `tcp_user_timeout`. The writer lock's connection has no statement timeout, because it runs
-  the migrations.
+  Times are `TIMESTAMPTZ` and map to `DateTime<Utc>`, calendar dates are `DATE`, integers are
+  `BIGINT`.
+- Migrations carry schema only. `Store::initialize` writes the `monitor_state` row, with the
+  device id, at start-up.
+- The GraphQL documents in `queries/` are copied from the portal's own client and trimmed. A change
+  to one is a change to what the monitor sends, so check it with `probe` before trusting it.
+- The pool has 4 connections. Each one runs with a 20 s `statement_timeout` and a 5 s
+  `lock_timeout`, asks the server for TCP keepalives (`tcp_keepalives_idle=30`,
+  `tcp_keepalives_interval=10`, `tcp_keepalives_count=3`, `tcp_user_timeout=60000`, in ms), and
+  is tested before each use. Getting a connection has 10 s. The pool keeps no minimum, idle limit
+  or lifetime, so sqlx runs no maintenance task and `Store::new` works outside a runtime. A
+  connection the server closed while idle (`idle_session_timeout`, a restart,
+  `pg_terminate_backend`) is replaced at its next use, so the role no longer needs
+  `idle_session_timeout` at 0. The lock's connection is queried every 0.5 s, so it is never idle for
+  longer than that.
+- The writer lock (`pg_try_advisory_lock`) has a connection of its own, outside the pool, with the
+  same keepalives, no statement or lock timeout because the migrations run there, and
+  `client_min_messages=warning`. It is never tested before use: a failed test would quietly open a
+  new connection without the lock. Every 0.5 s, a query with 30 s to answer checks in `pg_locks`
+  that this connection still holds the lock. sqlx pings the connection each time it goes back to
+  that pool, with no limit of its own, so the wait for the connection gets the same 30 s. The limit
+  is that long because a false loss stops the process, and the restart logs in to the portal and
+  loses the 6 hours of back-off after a rejected login. The monitor gives up on a silent connection
+  after about 30.5 s, and the server frees a vanished monitor's lock only after about 60 s, so the
+  lock cannot pass to a second copy while the first could still write.
+
+The database layer adds these lines to the log. None carries the address or a password.
+
+- When a migration is pending, sea-orm-migration logs `Applying all pending migrations`, then
+  `Applying migration '<name>'` and `Migration '<name>' has been applied` for each one it runs.
+  Those lines show even when a later migration fails and the run records nothing. The monitor then
+  logs `database migrations applied` with the names it applied, which is `[]` on every start with
+  nothing pending, alone. Postgres's notices, such as the migration table's `already exists,
+  skipping`, stay out because of `client_min_messages=warning`; warnings and errors still show.
+- `ping on idle connection returned error` (`info`, sqlx) appears each time the pool replaces a
+  connection the server closed while it was idle. There is one line per replaced connection, and
+  it has no address.
+- `there is no transaction in progress` (`warn`, `sqlx::postgres::notice`) follows a commit that
+  Postgres refused, because SeaORM sends a `ROLLBACK` after it.
+
+## Dependencies
+
+- `sea-orm` and `sea-orm-migration` are pinned with `=` at 2.0.4, with default features off.
+  sqlx gets no TLS feature: `cargo tree -e features -i sqlx-core | grep -c _tls` stays 0.
+- After any change to `Cargo.toml`, set these back with `cargo update -p <crate> --precise
+  <version>`, one crate per command: `sqlx` 0.9.0, `nix` 0.31.3, `uuid` 1.29.0, `winnow` 1.0.4,
+  `toml_edit` 0.25.17+spec-1.1.0, `toml_datetime` 1.1.2+spec-1.1.0, `regex` 1.13.1,
+  `regex-automata` 0.4.18 and `regex-syntax` 0.8.11. Check on crates.io that each new lock entry
+  is at least two weeks old, and move a newer one back with `--precise`.
+- `libsqlite3-sys` is in `Cargo.lock` and never compiled, and so are `sqlx-sqlite`, `sqlx-mysql`
+  and the `arrow-*` crates. The sqlx features that sea-orm's defaults turn on carry weak
+  `sqlx-sqlite?/...` edges, and cargo keeps the packages those edges name in the lock
+  (cargo#10801). `cargo tree --locked -e normal --target all -i libsqlite3-sys` prints nothing. An
+  audit that reads the lock still reports RUSTSEC-2026-0459 against `libsqlite3-sys` 0.37.0; look
+  again when sqlx 0.9.1 is two weeks old, after 2026-12-02.
+- `tokio-postgres` is a dev-dependency only: the tests' admin clients and the throwaway Postgres
+  use it.
 
 ## The probe command
 
