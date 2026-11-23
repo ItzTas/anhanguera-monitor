@@ -218,7 +218,7 @@ The database layer adds these lines to the log. None carries the address or a pa
 
 - The toolchain comes from `rust-toolchain.toml`. Keep its channel equal to the SDK's.
 - `sea-orm` and `sea-orm-migration` are pinned with `=` at 2.0.4, with default features off, and
-  so are `chrono`, `chrono-tz` and `unicode-normalization`. sqlx gets no TLS feature:
+  `chrono`, `chrono-tz` and `unicode-normalization` are pinned with `=` too. sqlx gets no TLS feature:
   `cargo tree -e features -i sqlx-core | grep -c _tls` stays 0.
 - After any change to `Cargo.toml`, set these back with `cargo update -p <crate> --precise
   <version>`, one crate per command: `sqlx` 0.9.0, `nix` 0.31.3, `uuid` 1.29.0, `winnow` 1.0.4,

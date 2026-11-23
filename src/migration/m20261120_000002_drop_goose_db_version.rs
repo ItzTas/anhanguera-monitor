@@ -19,9 +19,9 @@ impl MigrationTrait for Migration {
             .await?
             .ok_or_else(|| DbErr::Custom("the current schema query returned no row".to_owned()))?
             .try_get_by_index(0)?;
-        // Qualified with the schema the adoption read goose_db_version from: unqualified, the DROP
-        // would resolve through search_path to another schema's table (R4). No CASCADE: an object
-        // that depends on the table makes the DROP fail and the transaction undo it.
+        // Qualified with the adoption's own schema, so another schema's table is never dropped.
+        // No CASCADE: an object that depends on the table makes the DROP fail and the transaction
+        // undo it.
         db.execute_unprepared(&format!("DROP TABLE IF EXISTS {schema}.goose_db_version"))
             .await?;
         Ok(())

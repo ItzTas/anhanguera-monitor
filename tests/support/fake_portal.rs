@@ -91,7 +91,7 @@ impl FakePortal {
         self.state().backoff_until = until;
     }
 
-    // Holds the next student_id call, the first portal call of a cycle, until open_gate.
+    // Holds student_id, the first portal call of a cycle, until open_gate, which releases one call.
     pub fn gated(&self) {
         self.state().gate = Some(Arc::new(Notify::new()));
     }
