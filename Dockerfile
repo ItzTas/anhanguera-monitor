@@ -50,12 +50,12 @@ RUN case "$TARGETARCH" in \
 
 FROM scratch
 
-COPY plugin.json /plugin/plugin.json
-COPY settings.json /plugin/settings.json
-COPY --from=build /out/anhanguera-monitor /plugin/anhanguera-monitor
+COPY monitor.json /monitor/monitor.json
+COPY settings.json /monitor/settings.json
+COPY --from=build /out/anhanguera-monitor /monitor/anhanguera-monitor
 
 USER 65532:65532
 
 HEALTHCHECK NONE
 
-ENTRYPOINT ["/plugin/anhanguera-monitor"]
+ENTRYPOINT ["/monitor/anhanguera-monitor"]
