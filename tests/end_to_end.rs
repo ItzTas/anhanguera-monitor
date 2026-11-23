@@ -4,7 +4,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use anhanguera_monitor::migration::{DROP_GOOSE_DB_VERSION, GOOSE_SCHEMA};
-use monitor_hub_sdk::proto::{Event, EventsRequest, EventsResponse, WatchRequest, WatchResponse};
+use monitor_hub_sdk::proto::{
+    Event, EventsRequest, EventsResponse, StatusRequest, StatusResponse, WatchRequest,
+    WatchResponse,
+};
 use serde_json::Value;
 use support::{admin, database};
 use tokio::time::{Instant, timeout_at};
@@ -66,6 +69,26 @@ async fn next_watch_signal(stream: &mut Streaming<WatchResponse>, deadline: Inst
         .expect("an OK Watch signal")
         .expect("the Watch call stays open")
         .latest_seq
+}
+
+async fn first_cycle_finished(socket: &Path, deadline: Instant) {
+    loop {
+        let status = grpc(socket)
+            .await
+            .unary(
+                Request::new(StatusRequest {}),
+                PathAndQuery::from_static("/monitorhub.monitor.v1.Monitor/Status"),
+                ProstCodec::<StatusRequest, StatusResponse>::default(),
+            )
+            .await
+            .expect("status")
+            .into_inner();
+        if status.next_check_at.is_some() {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the first cycle did not finish");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 fn of_kind<'a>(events: &'a [Event], kind: &str) -> Option<&'a Event> {
@@ -149,6 +172,7 @@ async fn a_database_left_by_0_1_keeps_its_events_device_and_positions() {
         .into_iter()
         .map(|event| (event.seq, event.id))
         .collect();
+    first_cycle_finished(&spawned.socket, Instant::now() + DELIVERY_LIMIT).await;
     let exited = spawned.stop();
 
     assert_eq!(listed, seeded);
@@ -178,5 +202,5 @@ async fn a_database_left_by_0_1_keeps_its_events_device_and_positions() {
         .iter()
         .filter(|request| request.operation == "LoginStudent")
         .count();
-    assert!(logins <= 1, "{logins} logins");
+    assert_eq!(logins, 1, "{logins} logins");
 }
