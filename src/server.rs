@@ -515,7 +515,7 @@ mod tests {
             json!({
                 "protocol_version": 2,
                 "name": "anhanguera",
-                "command": ["anhanguera-monitor", "plugin"],
+                "command": ["anhanguera-monitor", "monitor"],
             })
         );
     }

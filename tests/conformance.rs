@@ -29,7 +29,7 @@ async fn the_plugin_conforms() {
     let ava = FakeAva::quiet().await;
     let sockets = SocketDir::create();
     let mut conformance = Conformance::new(env!("CARGO_BIN_EXE_anhanguera-monitor"));
-    conformance.command.push("plugin".to_owned());
+    conformance.command.push("monitor".to_owned());
     conformance.env = plugin_env(&db.url, &ava.url(), &sockets);
     conformance.min_events = 1;
     conformance.ready_timeout = Duration::from_secs(20);

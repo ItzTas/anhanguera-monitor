@@ -19,7 +19,7 @@ fn main() -> ExitCode {
     if arguments == ["probe"] {
         return anhanguera_monitor::probe::run();
     }
-    if arguments == ["plugin"] && launched_by_hub() {
+    if arguments == ["monitor"] && launched_by_hub() {
         return run_plugin();
     }
     eprintln!("{NOT_LAUNCHED_BY_HUB}");

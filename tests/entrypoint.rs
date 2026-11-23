@@ -68,7 +68,7 @@ async fn texts(client: &Client, query: &str) -> Vec<String> {
 
 #[test]
 fn refuses_to_run_outside_the_hub() {
-    assert_refuses(&run(&["plugin"]));
+    assert_refuses(&run(&["monitor"]));
 }
 
 #[test]

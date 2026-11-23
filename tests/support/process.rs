@@ -123,7 +123,7 @@ pub fn run_to_exit(env: &[(String, String)], limit: Duration) -> Exited {
 
 fn start(env: &[(String, String)]) -> Child {
     Command::new(env!("CARGO_BIN_EXE_anhanguera-monitor"))
-        .arg("plugin")
+        .arg("monitor")
         .env_clear()
         .env(MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE)
         .envs(env.iter().map(|(name, value)| (name, value)))

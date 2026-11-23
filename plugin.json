@@ -1,1 +1,1 @@
-{ "protocol_version": 2, "name": "anhanguera", "command": ["anhanguera-monitor", "plugin"] }
+{ "protocol_version": 2, "name": "anhanguera", "command": ["anhanguera-monitor", "monitor"] }
