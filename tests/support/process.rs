@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{self, Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,11 +21,13 @@ pub struct SocketDir {
 pub struct RunningPlugin {
     child: Child,
     pub socket: PathBuf,
+    stdout: Receiver<String>,
     stderr: Receiver<String>,
 }
 
 pub struct Exited {
     pub status: ExitStatus,
+    pub stdout: String,
     pub stderr: String,
 }
 
@@ -77,24 +79,16 @@ pub fn plugin_env(
 }
 
 pub fn spawn_plugin(env: &[(String, String)]) -> RunningPlugin {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_anhanguera-monitor"))
-        .arg("plugin")
-        .env_clear()
-        .env(MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE)
-        .envs(env.iter().map(|(name, value)| (name, value)))
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start the plugin");
-    let first_line = read_first_line(child.stdout.take().expect("piped stdout"));
+    let mut child = start(env);
+    let stdout = read_first_line(child.stdout.take().expect("piped stdout"));
     let stderr = read_all(child.stderr.take().expect("piped stderr"));
     let mut plugin = RunningPlugin {
         child,
         socket: PathBuf::new(),
+        stdout,
         stderr,
     };
-    let Ok(line) = first_line.recv_timeout(HANDSHAKE_LIMIT) else {
+    let Ok(line) = plugin.stdout.recv_timeout(HANDSHAKE_LIMIT) else {
         plugin.fail("the plugin printed no handshake line within 30 seconds");
     };
     let Some(socket) = handshake_socket(&line) else {
@@ -104,6 +98,40 @@ pub fn spawn_plugin(env: &[(String, String)]) -> RunningPlugin {
     };
     plugin.socket = socket;
     plugin
+}
+
+// Waits for the end of stderr, which comes when the process exits.
+pub fn run_to_exit(env: &[(String, String)], limit: Duration) -> Exited {
+    let mut child = start(env);
+    let stdout = read_all(child.stdout.take().expect("piped stdout"));
+    let stderr = read_all(child.stderr.take().expect("piped stderr"));
+    let Ok(stderr) = stderr.recv_timeout(limit) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("the plugin did not exit within {limit:?}");
+    };
+    let status = child.wait().expect("wait for the plugin");
+    let stdout = stdout
+        .recv_timeout(PIPE_LIMIT)
+        .unwrap_or_else(|_| "<the pipe stayed open>".to_owned());
+    Exited {
+        status,
+        stdout,
+        stderr,
+    }
+}
+
+fn start(env: &[(String, String)]) -> Child {
+    Command::new(env!("CARGO_BIN_EXE_anhanguera-monitor"))
+        .arg("plugin")
+        .env_clear()
+        .env(MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE)
+        .envs(env.iter().map(|(name, value)| (name, value)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start the plugin")
 }
 
 pub fn require_sh() -> bool {
@@ -138,8 +166,27 @@ impl RunningPlugin {
         let Ok(stderr) = self.stderr.recv_timeout(STOP_GRACE) else {
             self.fail(&format!("the plugin did not stop within {STOP_GRACE:?}"));
         };
+        self.exited(stderr)
+    }
+
+    pub fn wait_exit(&mut self, limit: Duration) -> Exited {
+        let Ok(stderr) = self.stderr.recv_timeout(limit) else {
+            self.fail(&format!("the plugin did not exit within {limit:?}"));
+        };
+        self.exited(stderr)
+    }
+
+    fn exited(&mut self, stderr: String) -> Exited {
         let status = self.child.wait().expect("wait for the plugin");
-        Exited { status, stderr }
+        let stdout = self
+            .stdout
+            .recv_timeout(PIPE_LIMIT)
+            .unwrap_or_else(|_| "<the pipe stayed open>".to_owned());
+        Exited {
+            status,
+            stdout,
+            stderr,
+        }
     }
 
     fn fail(&mut self, problem: &str) -> ! {
@@ -160,16 +207,19 @@ impl Drop for RunningPlugin {
     }
 }
 
+// Sends the first line, then the rest of the pipe once it closes.
 fn read_first_line(stdout: impl Read + Send + 'static) -> Receiver<String> {
-    let (sender, first_line) = mpsc::channel();
+    let (sender, lines) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
         let _ = reader.read_line(&mut line);
         let _ = sender.send(line);
-        let _ = io::copy(&mut reader, &mut io::sink());
+        let mut rest = String::new();
+        let _ = reader.read_to_string(&mut rest);
+        let _ = sender.send(rest);
     });
-    first_line
+    lines
 }
 
 fn read_all(pipe: impl Read + Send + 'static) -> Receiver<String> {

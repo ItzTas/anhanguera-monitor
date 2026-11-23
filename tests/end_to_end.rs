@@ -3,11 +3,12 @@ pub mod support;
 use std::path::Path;
 use std::time::Duration;
 
+use anhanguera_monitor::migration::{DROP_GOOSE_DB_VERSION, GOOSE_SCHEMA};
 use monitor_hub_plugin::proto::{
     Event, EventsRequest, EventsResponse, WatchRequest, WatchResponse,
 };
 use serde_json::Value;
-use support::database;
+use support::{admin, database};
 use tokio::time::{Instant, timeout_at};
 use tonic::client::Grpc;
 use tonic::codegen::http::uri::PathAndQuery;
@@ -17,6 +18,7 @@ use tonic_prost::ProstCodec;
 
 use support::fake_ava::FakeAva;
 use support::process::{SocketDir, plugin_env, require_sh, spawn_plugin};
+use support::schema::{goose_era_database, seed_rows};
 
 const OPEN_INVOICES: &str = include_str!("../testdata/ava/Invoices.open.json");
 const DELIVERY_LIMIT: Duration = Duration::from_secs(30);
@@ -114,4 +116,69 @@ async fn an_open_invoice_reaches_the_hub_through_watch_and_events() {
     assert!(invoice.body.contains("R$ 123,45"), "{:?}", invoice.body);
     assert!(invoice.body.contains("Boleto: "), "{:?}", invoice.body);
     assert_eq!(exited.status.code(), Some(0), "{}", exited.stderr);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_database_left_by_0_1_keeps_its_events_device_and_positions() {
+    if !require_sh() {
+        return;
+    }
+    let Some(db) = database().await else {
+        return;
+    };
+    let client = admin(&db.url).await;
+    goose_era_database(&client, &[1, 2], &[1, 2]).await;
+    seed_rows(&client, true).await;
+    let seeded: Vec<(i64, String)> = client
+        .query("SELECT seq, id FROM events ORDER BY seq", &[])
+        .await
+        .expect("the seeded events")
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    let device = "SELECT device_id FROM monitor_state";
+    let seeded_device: String = client
+        .query_one(device, &[])
+        .await
+        .expect("the seeded device id")
+        .get(0);
+    let ava = FakeAva::quiet().await;
+    let sockets = SocketDir::create();
+    let mut plugin = spawn_plugin(&plugin_env(&db.url, &ava.url(), &sockets));
+
+    let listed: Vec<(i64, String)> = events(&plugin.socket, 0)
+        .await
+        .into_iter()
+        .map(|event| (event.seq, event.id))
+        .collect();
+    let exited = plugin.stop();
+
+    assert_eq!(listed, seeded);
+    assert_eq!(exited.status.code(), Some(0), "{}", exited.stderr);
+    let device_id: String = client
+        .query_one(device, &[])
+        .await
+        .expect("the device id")
+        .get(0);
+    assert_eq!(device_id, seeded_device);
+    let versions: Vec<String> = client
+        .query("SELECT version FROM seaql_migrations ORDER BY version", &[])
+        .await
+        .expect("the recorded migrations")
+        .iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert_eq!(versions, [GOOSE_SCHEMA, DROP_GOOSE_DB_VERSION]);
+    let goose_gone: bool = client
+        .query_one("SELECT to_regclass('goose_db_version') IS NULL", &[])
+        .await
+        .expect("look for goose_db_version")
+        .get(0);
+    assert!(goose_gone);
+    let logins = ava
+        .requests()
+        .iter()
+        .filter(|request| request.operation == "LoginStudent")
+        .count();
+    assert!(logins <= 1, "{logins} logins");
 }

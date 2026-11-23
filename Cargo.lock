@@ -1768,7 +1768,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tokio-postgres",
  "tokio-stream",
  "tonic",
  "tonic-health",

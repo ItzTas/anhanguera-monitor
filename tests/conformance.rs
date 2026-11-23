@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use anhanguera_monitor::store::Store;
 use monitor_hub_plugin_testkit::conformance::{Conformance, Outcome, run};
-use serde_json::json;
 
 use support::fake_ava::FakeAva;
 use support::process::{SocketDir, plugin_env};
@@ -21,36 +20,13 @@ async fn seed_the_welcome(url: &str) {
         .expect("seed the welcome event");
 }
 
-async fn quiet_portal() -> FakeAva {
-    let ava = FakeAva::start().await;
-    ava.set(
-        "Invoices",
-        200,
-        json!({"data": {"getInvoiceHomeModel": {
-            "informationType": "PAYMENTS_ON_TIME",
-            "billingDay": "",
-            "invoiceSections": []
-        }}}),
-    );
-    ava.set(
-        "SubjectDeadlines",
-        200,
-        json!({"data": {"data": {
-            "id": "KRT-00000000-0000-0000-0000-000000000001",
-            "subjectEnrollments": []
-        }}}),
-    );
-    ava.set("Calendar", 200, json!({"data": {"data": []}}));
-    ava
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn the_plugin_conforms() {
     let Some(db) = migrated_database().await else {
         return;
     };
     seed_the_welcome(&db.url).await;
-    let ava = quiet_portal().await;
+    let ava = FakeAva::quiet().await;
     let sockets = SocketDir::create();
     let mut conformance = Conformance::new(env!("CARGO_BIN_EXE_anhanguera-monitor"));
     conformance.command.push("plugin".to_owned());

@@ -13,11 +13,10 @@ use crate::config::Config;
 use crate::monitor::{Monitor, MonitorOptions};
 use crate::scheduler::Scheduler;
 use crate::server::AnhangueraPlugin;
-use crate::store::{Store, WriterLock, acquire_writer_lock};
+use crate::store::{LOCK_LOST, Store, WriterLock, acquire_writer_lock};
 use crate::timestamp::system_clock;
 
 const START_UP_LIMIT: Duration = Duration::from_secs(45);
-const LOCK_LOST: &str = "the database lock was lost";
 
 struct Started {
     lock: WriterLock,
@@ -48,7 +47,7 @@ pub fn new_device_id() -> String {
 
 async fn start_up(config: &Config, limit: Duration) -> anyhow::Result<Started> {
     let deadline = Instant::now() + limit;
-    let mut lock = within(
+    let lock = within(
         deadline,
         limit,
         "acquiring the database writer lock",
@@ -62,7 +61,7 @@ async fn start_up(config: &Config, limit: Duration) -> anyhow::Result<Started> {
         lock.migrate(),
     )
     .await?;
-    info!(versions = ?applied, "database migrations applied");
+    info!(migrations = ?applied, "database migrations applied");
     let store = Store::new(config.database_url.reveal()).context("opening the database pool")?;
     let clock = system_clock();
     let (first_read_boundary, newest_event) =
@@ -221,7 +220,7 @@ mod tests {
 
         let first = start_up(&config, START_UP_LIMIT).await.expect("start-up");
         let before = first.monitor.store().device_id().await.expect("device id");
-        drop(first);
+        first.lock.release().await.expect("release the first lock");
         let second = start_up(&config, START_UP_LIMIT)
             .await
             .expect("second start-up");

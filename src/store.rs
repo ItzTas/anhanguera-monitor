@@ -1,48 +1,27 @@
 mod connection;
 mod entity;
+mod lock;
 
 use std::collections::HashSet;
 use std::error::Error;
-use std::time::Duration;
 
 use crate::events::{Kind, NewEvent};
 use chrono::{DateTime, NaiveDate, Utc};
-use connection::{CONNECT_TIMEOUT, Limits, POOL_LIMITS, database_options, pool};
+use connection::{Limits, POOL_LIMITS, database_options, pool};
 use entity::{enrollments, events, invoices, monitor_state, problems, sent_keys};
 use monitor_hub_plugin::Notifier;
-use monitor_hub_plugin::migrate::{MigrateError, Migration, up};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, ConnAcquireErr, ConnectionTrait, DatabaseConnection,
     DatabaseTransaction, DbBackend, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
     RuntimeErr, Statement, TransactionTrait, TryInsertResult, Value,
 };
-use tokio::task::{JoinError, JoinHandle};
-use tokio_postgres::{Client, Config, NoTls};
 
-pub const MIGRATIONS: &[Migration] = &[
-    Migration {
-        version: 1,
-        name: "00001_init.sql",
-        sql: include_str!("../sql/schema/00001_init.sql"),
-    },
-    Migration {
-        version: 2,
-        name: "00002_invoice_per_enrollment.sql",
-        sql: include_str!("../sql/schema/00002_invoice_per_enrollment.sql"),
-    },
-];
+pub use lock::{
+    LOCK_CHECK_EVERY, LOCK_CHECK_LIMIT, LOCK_LOST, WRITER_LOCK_ID, WriterLock, acquire_writer_lock,
+};
 
-pub const WRITER_LOCK_ID: i64 = 0x616e_6867_7565_7261;
-
-const NOT_A_POSTGRES_ADDRESS: &str = "DATABASE_URL is not a valid Postgres address";
-const KEEPALIVES_IDLE: Duration = Duration::from_secs(30);
-const KEEPALIVES_INTERVAL: Duration = Duration::from_secs(10);
-const KEEPALIVES_RETRIES: u32 = 3;
-const TCP_USER_TIMEOUT: Duration = Duration::from_secs(60);
 const LEAD_TIMES_KEPT: u64 = 6;
-
-const TRY_WRITER_LOCK: &str = "SELECT pg_try_advisory_lock($1)";
 
 // Raw SQL on purpose. LOCK_STATE locks the state row before each event's INSERT, so the order of
 // the seq values is the order of the commits. Sent keys take the server's clock, PAYMENTS_FAILED
@@ -76,10 +55,10 @@ pub enum StoreError {
     Timeout(&'static str),
     #[error(transparent)]
     Database(DbErr),
-    #[error(transparent)]
-    LockConnection(tokio_postgres::Error),
-    #[error(transparent)]
-    Migrate(#[from] MigrateError),
+    #[error("{0}")]
+    Migration(String),
+    #[error("{LOCK_LOST}: {0}")]
+    LockLost(String),
 }
 
 impl From<DbErr> for StoreError {
@@ -88,12 +67,6 @@ impl From<DbErr> for StoreError {
             return StoreError::Database(error);
         };
         StoreError::Timeout(step)
-    }
-}
-
-impl From<tokio_postgres::Error> for StoreError {
-    fn from(error: tokio_postgres::Error) -> Self {
-        StoreError::LockConnection(error)
     }
 }
 
@@ -166,51 +139,6 @@ pub struct RecordBatch {
 pub struct PaymentsStreak {
     pub since: DateTime<Utc>,
     pub alerted: bool,
-}
-
-pub struct WriterLock {
-    client: Client,
-    connection: Option<JoinHandle<Result<(), tokio_postgres::Error>>>,
-    close_reason: Option<String>,
-}
-
-pub async fn acquire_writer_lock(database_url: &str) -> Result<WriterLock, StoreError> {
-    let config = lock_config(database_url)?;
-    let (client, connection) = tokio::time::timeout(CONNECT_TIMEOUT, config.connect(NoTls))
-        .await
-        .map_err(|_| StoreError::Timeout("connecting to the database for the writer lock"))??;
-    let connection = tokio::spawn(connection);
-    let locked: bool = client
-        .query_one(TRY_WRITER_LOCK, &[&WRITER_LOCK_ID])
-        .await?
-        .try_get(0)?;
-    if !locked {
-        return Err(StoreError::Locked);
-    }
-    Ok(WriterLock {
-        client,
-        connection: Some(connection),
-        close_reason: None,
-    })
-}
-
-impl WriterLock {
-    pub async fn migrate(&mut self) -> Result<Vec<i64>, StoreError> {
-        Ok(up(&mut self.client, MIGRATIONS).await?)
-    }
-
-    pub async fn closed(&mut self) {
-        let Some(connection) = self.connection.as_mut() else {
-            return;
-        };
-        let ended = connection.await;
-        self.close_reason = reason_for(ended);
-        self.connection = None;
-    }
-
-    pub fn close_reason(&self) -> Option<String> {
-        self.close_reason.clone()
-    }
 }
 
 #[derive(Clone)]
@@ -513,31 +441,6 @@ async fn device_id(connection: &impl ConnectionTrait) -> Result<Option<String>, 
         .into_tuple()
         .one(connection)
         .await?)
-}
-
-fn lock_config(database_url: &str) -> Result<Config, StoreError> {
-    let mut config = parse(database_url)?;
-    config
-        .keepalives(true)
-        .keepalives_idle(KEEPALIVES_IDLE)
-        .keepalives_interval(KEEPALIVES_INTERVAL)
-        .keepalives_retries(KEEPALIVES_RETRIES)
-        .tcp_user_timeout(TCP_USER_TIMEOUT);
-    Ok(config)
-}
-
-fn parse(database_url: &str) -> Result<Config, StoreError> {
-    database_url
-        .parse()
-        .map_err(|_| StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS))
-}
-
-fn reason_for(ended: Result<Result<(), tokio_postgres::Error>, JoinError>) -> Option<String> {
-    match ended {
-        Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(chain_text(&error)),
-        Err(error) => Some(chain_text(&error)),
-    }
 }
 
 pub(crate) fn chain_text(error: &(dyn Error + 'static)) -> String {

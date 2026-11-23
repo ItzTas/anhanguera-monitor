@@ -4,13 +4,31 @@ use std::error::Error;
 use std::time::{Duration, Instant};
 
 use anhanguera_monitor::events::NewEvent;
-use anhanguera_monitor::store::{EnrollmentState, KnownInvoice, RecordBatch, Store, StoreError};
+use anhanguera_monitor::migration::{DROP_GOOSE_DB_VERSION, GOOSE_SCHEMA};
+use anhanguera_monitor::store::{
+    EnrollmentState, KnownInvoice, LOCK_CHECK_EVERY, LOCK_CHECK_LIMIT, RecordBatch, Store,
+    StoreError, acquire_writer_lock,
+};
 use chrono::{DateTime, NaiveDate, TimeDelta, Utc};
 use tokio::net::TcpListener;
+use tokio::time::timeout;
 
-use support::{next_signal, pending_signal};
+use support::proxy::PausingProxy;
+use support::schema::table_names;
+use support::{admin, end_the_writer_locks_connection, next_signal, pending_signal};
 
 const PASSWORD: &str = "hunter2";
+const TABLES_ONLY: &str = "anhanguera_tables_only";
+const TODAYS_TABLES: [&str; 7] = [
+    "enrollments",
+    "events",
+    "invoices",
+    "monitor_state",
+    "problems",
+    "seaql_migrations",
+    "sent_keys",
+];
+const LOCK_TIMED_OUT: &str = "connecting to the database for the writer lock timed out";
 const REFUSE_EVENTS_AT_COMMIT: &str = "CREATE FUNCTION refuse_events() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused at commit'; END $$;
 CREATE CONSTRAINT TRIGGER refuse_at_commit AFTER INSERT ON events DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION refuse_events();";
 
@@ -614,8 +632,8 @@ fn with_query(url: &str, parameter: &str) -> String {
     format!("{url}{separator}{parameter}")
 }
 
-#[test]
-fn invalid_url_never_echoes_the_address() {
+#[tokio::test]
+async fn invalid_url_never_echoes_the_address() {
     let refused = [
         ("host=db user=anhanguera dbname=anhanguera", "db"),
         ("postgres://anhanguera:hunter2@h1,h2/anhanguera", "h1,h2"),
@@ -665,13 +683,18 @@ fn invalid_url_never_echoes_the_address() {
         ),
     ];
     for (url, host) in refused {
-        let Err(error) = Store::new(url) else {
+        let Err(store) = Store::new(url) else {
             panic!("the store accepted {url}")
         };
-        assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
-        assert_hides_the_login(&error, url);
-        let printed = everything_printed(&error);
-        assert!(!printed.contains(host), "{url}: {printed}");
+        let Err(lock) = acquire_writer_lock(url).await else {
+            panic!("the writer lock accepted {url}")
+        };
+        for error in [store, lock] {
+            assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
+            assert_hides_the_login(&error, url);
+            let printed = everything_printed(&error);
+            assert!(!printed.contains(host), "{url}: {printed}");
+        }
     }
 }
 
@@ -684,15 +707,20 @@ async fn refused_connections_never_show_the_password() {
     let store = Store::new(&url).expect("store");
 
     let started = Instant::now();
-    let error = store.device_id().await.expect_err("a closed port answered");
+    let (lock, read) = tokio::join!(acquire_writer_lock(&url), store.device_id());
     let elapsed = started.elapsed();
 
     assert!(elapsed < Duration::from_secs(13), "took {elapsed:?}");
-    assert!(matches!(error, StoreError::Timeout(_)), "{error:?}");
-    assert_eq!(error.to_string(), "getting a database connection timed out");
-    assert_hides_the_login(&error, &url);
-    let printed = everything_printed(&error);
-    assert!(!printed.contains(&address.to_string()), "{printed}");
+    let lock = lock.err().expect("a closed port gave the lock");
+    let read = read.expect_err("a closed port answered");
+    assert_eq!(lock.to_string(), LOCK_TIMED_OUT);
+    assert_eq!(read.to_string(), "getting a database connection timed out");
+    for error in [&lock, &read] {
+        assert!(matches!(error, StoreError::Timeout(_)), "{error:?}");
+        assert_hides_the_login(error, &url);
+        let printed = everything_printed(error);
+        assert!(!printed.contains(&address.to_string()), "{printed}");
+    }
 }
 
 #[tokio::test]
@@ -704,13 +732,14 @@ async fn rejected_logins_never_show_the_password() {
     let url = with_login(&db.url, &format!("intruder:{PASSWORD}"));
     let store = Store::new(&url).expect("store");
 
-    let error = store
-        .device_id()
-        .await
-        .expect_err("an unknown role was let in");
+    let (lock, read) = tokio::join!(acquire_writer_lock(&url), store.device_id());
 
-    assert!(matches!(error, StoreError::Database(_)), "{error:?}");
-    assert_hides_the_login(&error, &url);
+    let lock = lock.err().expect("an unknown role took the lock");
+    let read = read.expect_err("an unknown role was let in");
+    for error in [&lock, &read] {
+        assert!(matches!(error, StoreError::Database(_)), "{error:?}");
+        assert_hides_the_login(error, &url);
+    }
 }
 
 #[tokio::test]
@@ -725,17 +754,20 @@ async fn a_url_that_requires_tls_is_refused_at_once() {
     let store = Store::new(&url).expect("store");
 
     let started = Instant::now();
-    let error = store
-        .device_id()
-        .await
-        .expect_err("an address that requires TLS was let in");
+    let (lock, read) = tokio::join!(acquire_writer_lock(&url), store.device_id());
     let elapsed = started.elapsed();
 
     assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
-    assert!(matches!(error, StoreError::Database(_)), "{error:?}");
-    let printed = everything_printed(&error);
-    assert!(printed.contains("TLS"), "{printed}");
-    assert_hides_the_login(&error, &url);
+    let lock = lock
+        .err()
+        .expect("an address that requires TLS took the lock");
+    let read = read.expect_err("an address that requires TLS was let in");
+    for error in [&lock, &read] {
+        assert!(matches!(error, StoreError::Database(_)), "{error:?}");
+        let printed = everything_printed(error);
+        assert!(printed.contains("TLS"), "{printed}");
+        assert_hides_the_login(error, &url);
+    }
 }
 
 #[tokio::test]
@@ -752,16 +784,220 @@ async fn silent_servers_time_out_without_showing_the_address() {
     let store = Store::new(&url).expect("store");
 
     let started = Instant::now();
-    let error = store
-        .device_id()
-        .await
-        .expect_err("a silent server answered");
+    let (lock, read) = tokio::join!(acquire_writer_lock(&url), store.device_id());
     let elapsed = started.elapsed();
     silent.abort();
 
     assert!(elapsed < Duration::from_secs(13), "took {elapsed:?}");
-    assert!(matches!(error, StoreError::Timeout(_)), "{error:?}");
-    assert_hides_the_login(&error, &url);
-    let printed = everything_printed(&error);
-    assert!(!printed.contains(&address.to_string()), "{printed}");
+    let lock = lock.err().expect("a silent server gave the lock");
+    let read = read.expect_err("a silent server answered");
+    assert_eq!(lock.to_string(), LOCK_TIMED_OUT);
+    for error in [&lock, &read] {
+        assert!(matches!(error, StoreError::Timeout(_)), "{error:?}");
+        assert_hides_the_login(error, &url);
+        let printed = everything_printed(error);
+        assert!(!printed.contains(&address.to_string()), "{printed}");
+    }
+}
+
+fn assert_reason_hides_the_address(reason: &str, url: &str) {
+    let host_and_port = url
+        .split_once('@')
+        .and_then(|(_, rest)| rest.split('/').next())
+        .expect("a host and port in the URL");
+    assert!(!reason.contains(url), "{reason}");
+    assert!(!reason.contains(host_and_port), "{reason}");
+}
+
+#[tokio::test]
+async fn migrate_applies_the_migrations_once() {
+    let Some(db) = support::database().await else {
+        return;
+    };
+    let lock = acquire_writer_lock(&db.url).await.expect("lock");
+
+    let first = lock.migrate().await.expect("migrate");
+    let again = lock.migrate().await.expect("migrate again");
+
+    assert_eq!(first, [GOOSE_SCHEMA, DROP_GOOSE_DB_VERSION]);
+    assert_eq!(again, Vec::<String>::new());
+    assert_eq!(table_names(&admin(&db.url).await).await, TODAYS_TABLES);
+}
+
+#[tokio::test]
+async fn a_role_that_cannot_create_tables_starts_on_a_migrated_database() {
+    let Some(db) = support::migrated_database().await else {
+        return;
+    };
+    admin(&db.url)
+        .await
+        .batch_execute(&format!(
+            "DO $$ BEGIN CREATE ROLE {TABLES_ONLY} LOGIN PASSWORD '{PASSWORD}';
+             EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$;
+             REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+             GRANT SELECT, INSERT, UPDATE, DELETE
+                 ON enrollments, events, invoices, monitor_state, problems, sent_keys
+                 TO {TABLES_ONLY};
+             GRANT USAGE, SELECT ON SEQUENCE events_seq_seq TO {TABLES_ONLY};
+             GRANT SELECT ON seaql_migrations TO {TABLES_ONLY};"
+        ))
+        .await
+        .expect("a role with table rights only");
+    let url = with_login(&db.url, &format!("{TABLES_ONLY}:{PASSWORD}"));
+    let lock = acquire_writer_lock(&url).await.expect("lock as that role");
+
+    let applied = lock.migrate().await;
+
+    assert_eq!(applied.expect("migrate as that role"), Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn writer_lock_admits_one_holder() {
+    let Some(db) = support::database().await else {
+        return;
+    };
+    let first = acquire_writer_lock(&db.url).await.expect("first lock");
+
+    let second = acquire_writer_lock(&db.url).await;
+    first.release().await.expect("release the first lock");
+    let third = acquire_writer_lock(&db.url).await;
+
+    let Err(refused) = second else {
+        panic!("a second holder took the lock");
+    };
+    assert!(matches!(refused, StoreError::Locked), "{refused:?}");
+    assert_eq!(
+        refused.to_string(),
+        "another anhanguera-monitor process holds the database lock"
+    );
+    third.expect("the lock once the first released it");
+}
+
+#[tokio::test]
+async fn writer_lock_notices_its_connection_ending() {
+    let Some(db) = support::database().await else {
+        return;
+    };
+    let mut lock = acquire_writer_lock(&db.url).await.expect("lock");
+
+    end_the_writer_locks_connection(&admin(&db.url).await).await;
+    timeout(Duration::from_secs(1), lock.closed())
+        .await
+        .expect("closed resolves once the backend ends");
+
+    let reason = lock.close_reason().expect("a reason");
+    assert!(
+        reason.starts_with("the lock's connection failed: "),
+        "{reason}"
+    );
+    assert_reason_hides_the_address(&reason, &db.url);
+}
+
+#[tokio::test]
+async fn a_lock_whose_connection_ended_refuses_to_migrate() {
+    let Some(db) = support::database().await else {
+        return;
+    };
+    let lock = acquire_writer_lock(&db.url).await.expect("lock");
+    let client = admin(&db.url).await;
+    end_the_writer_locks_connection(&client).await;
+
+    let error = lock
+        .migrate()
+        .await
+        .expect_err("a lock without its connection migrated");
+
+    let StoreError::LockLost(reason) = &error else {
+        panic!("{error:?}");
+    };
+    assert!(
+        reason.starts_with("the lock's connection failed: "),
+        "{reason}"
+    );
+    assert_reason_hides_the_address(reason, &db.url);
+    assert!(
+        error
+            .to_string()
+            .starts_with("the database lock was lost: the lock's connection failed: "),
+        "{error}"
+    );
+    assert_eq!(table_names(&client).await, Vec::<String>::new());
+}
+
+#[tokio::test]
+async fn writer_lock_notices_a_connection_that_stops_answering() {
+    let Some(db) = support::database().await else {
+        return;
+    };
+    let (proxy, url) = PausingProxy::start(&db.url).await;
+    let mut lock = acquire_writer_lock(&url)
+        .await
+        .expect("lock through the proxy");
+
+    proxy.pause();
+    let started = Instant::now();
+    timeout(
+        LOCK_CHECK_LIMIT + LOCK_CHECK_EVERY + Duration::from_secs(2),
+        lock.closed(),
+    )
+    .await
+    .expect("closed resolves once the connection stops answering");
+
+    let elapsed = started.elapsed();
+    assert!(elapsed >= LOCK_CHECK_LIMIT, "{elapsed:?}");
+    assert_eq!(
+        lock.close_reason().as_deref(),
+        Some("the lock's connection did not answer within 30s")
+    );
+}
+
+#[tokio::test]
+async fn writer_lock_notices_an_idle_connection_that_stops_answering() {
+    let Some(db) = support::database().await else {
+        return;
+    };
+    let (proxy, url) = PausingProxy::start(&db.url).await;
+    let mut lock = acquire_writer_lock(&url)
+        .await
+        .expect("lock through the proxy");
+    // The pause comes between checks, while the connection sits idle in the pool.
+    let settled = timeout(2 * LOCK_CHECK_EVERY + LOCK_CHECK_EVERY / 4, lock.closed()).await;
+    assert!(
+        settled.is_err(),
+        "closed resolved: {:?}",
+        lock.close_reason()
+    );
+
+    proxy.pause();
+    let started = Instant::now();
+    timeout(
+        LOCK_CHECK_LIMIT + LOCK_CHECK_EVERY + Duration::from_secs(2),
+        lock.closed(),
+    )
+    .await
+    .expect("closed resolves once the idle connection stops answering");
+
+    let elapsed = started.elapsed();
+    assert!(elapsed >= LOCK_CHECK_LIMIT, "{elapsed:?}");
+    assert_eq!(
+        lock.close_reason().as_deref(),
+        Some("the lock's connection did not answer within 30s")
+    );
+}
+
+#[tokio::test]
+async fn writer_lock_stays_while_its_connection_answers() {
+    let Some(db) = support::database().await else {
+        return;
+    };
+    let mut lock = acquire_writer_lock(&db.url).await.expect("lock");
+
+    let waited = timeout(3 * LOCK_CHECK_EVERY, lock.closed()).await;
+
+    assert!(
+        waited.is_err(),
+        "closed resolved: {:?}",
+        lock.close_reason()
+    );
+    assert_eq!(lock.close_reason(), None);
 }

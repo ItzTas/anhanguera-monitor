@@ -59,6 +59,29 @@ impl FakeAva {
         FakeAva { portal, server }
     }
 
+    pub async fn quiet() -> FakeAva {
+        let ava = FakeAva::start().await;
+        ava.set(
+            "Invoices",
+            200,
+            json!({"data": {"getInvoiceHomeModel": {
+                "informationType": "PAYMENTS_ON_TIME",
+                "billingDay": "",
+                "invoiceSections": []
+            }}}),
+        );
+        ava.set(
+            "SubjectDeadlines",
+            200,
+            json!({"data": {"data": {
+                "id": "KRT-00000000-0000-0000-0000-000000000001",
+                "subjectEnrollments": []
+            }}}),
+        );
+        ava.set("Calendar", 200, json!({"data": {"data": []}}));
+        ava
+    }
+
     pub fn url(&self) -> String {
         self.portal.url.clone()
     }
