@@ -7,16 +7,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A monitor-hub monitor. It reads a student's account on the Anhanguera student portal (the AVA) and
 records events: an invoice to pay, a payment about to fall due, coursework about to close, and an
 urgent event whenever it cannot read the portal. The hub reads those events and sends the
-notifications. The monitor is written in Rust on the monitor-hub plugin SDK (`monitor-hub-plugin`,
-git tag `sdk-rust/v0.3.0`). Protocol-bound names keep the word "plugin": `plugin.json`, the
-`plugin` argument, `/plugin/` in the image, the SDK's `Plugin` trait.
+notifications. The monitor is written in Rust on the monitor-hub SDK (`monitor-hub-sdk`, git tag
+`sdk-rust/v0.4.0`).
 
 Payments come first. Coursework follows, for the courses named in `COURSES`. The academic
 calendar is a safety net. When the monitor cannot read the portal it says so: a page it could not
 parse is reported, never read as "nothing to pay". It only reads, and writes nothing on the portal.
 
-The image does not run on its own. It holds `/plugin/plugin.json`, `/plugin/settings.json` and
-`/plugin/anhanguera-monitor`, and the hub's image build copies that directory in.
+The image does not run on its own. It holds `/monitor/monitor.json`, `/monitor/settings.json` and
+`/monitor/anhanguera-monitor`, and the hub copies `/monitor/` to
+`/opt/monitor-hub/monitors/anhanguera/`.
 
 **Before creating or moving a module, test file, migration, GraphQL document or any
 config/scaffolding file, read `.claude/skills/project-structure/SKILL.md`.** It holds the full
@@ -84,9 +84,11 @@ skipping.
   with an empty `goose_db_version`) and checks that the first migration adopts them without
   losing a row, and that the second drops `goose_db_version`.
 - `sh` with `kill` for the tests that start the binary and signal it.
-- The conformance command for `tests/conformance.rs`: the binary named by `PLUGIN_CONFORMANCE`,
-  or else `go install` of `plugin-conformance` at the SDK's Go tag `sdk-go/v0.4.0`, cached under
-  `~/.cache/monitor-hub/plugin-conformance/`.
+- The conformance command for `tests/conformance.rs`: the binary named by `MONITOR_CONFORMANCE`,
+  or else `go install` of `monitor-conformance` at the SDK's Go tag `sdk-go/v0.6.0`, cached under
+  `~/.cache/monitor-hub/monitor-conformance/`. It fails a monitor whose `Watch` answers
+  `UNIMPLEMENTED`. The test does not pass `monitor_dir`, because `monitor-conformance` v0.6.0
+  accepts only `settings_version` 1 and `settings.json` is version 2.
 - The portal is a fake GraphQL server (`tests/support/fake_ava.rs`) that serves the fictitious
   answers in `testdata/ava/`. Cycle tests use a fake `Portal` (`tests/support/fake_portal.rs`).
 
@@ -94,7 +96,7 @@ The binary of `tests/store.rs` takes about 33 s, because two tests pause a TCP p
 (`tests/support/proxy.rs`) and wait for the lock's 30 s loss limit to run out.
 
 The SDK refuses Unix socket paths longer than 100 bytes, so a long `TMPDIR` breaks the tests that
-start the plugin. Run them with a short one (`TMPDIR=/tmp`). The same holds under the hub, where
+start the monitor. Run them with a short one (`TMPDIR=/tmp`). The same holds under the hub, where
 `TMPDIR` is `/tmp`.
 
 CI (`.github/workflows/docker.yml`) runs `cargo fmt --check`, clippy and `cargo test --locked`
@@ -115,7 +117,8 @@ compute the same tag.
 ## Configuration
 
 `settings.json` (version 2) declares every setting, with its default, and `src/config.rs` embeds
-it. Under monitor-hub, set them on the hub with the `ANHANGUERA__` prefix
+it. The image ships it as `/monitor/settings.json`, and this version of the hub does not read it.
+Under monitor-hub, set them on the hub with the `ANHANGUERA__` prefix
 (`ANHANGUERA__COURSES` and so on). The hub removes the prefix before it starts the monitor. The
 monitor reads only its environment, never a `.env` file. `.env.example` lists every variable
 except `AVA_GRAPHQL_URL`, which only the tests set. The password is set by `AVA_PASSWORD` or
@@ -183,7 +186,7 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
 
 ## Process contract
 
-- The hub starts `anhanguera-monitor plugin` with its cookie variable. Started any other way, the
+- The hub starts `anhanguera-monitor monitor` with its cookie variable. Started any other way, the
   binary prints the SDK's `NOT_LAUNCHED_BY_HUB` text on stderr and exits 1. `probe` and
   `validate-settings` are the two commands that run without the hub.
 - Stdout carries only the handshake line. Logs go to stderr as JSON lines.
@@ -191,7 +194,7 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   lock's connection, opens the pool, reads the newest issued `seq` and the newest stored event, and
   creates the state row with the device id, all before the handshake. Each connection attempt has
   10 s, and sqlx retries a refused connection within them. The whole sequence has 45 s, because the
-  hub kills a plugin that has not answered in 60 s. Start-up does not call the portal, so nothing
+  hub kills a monitor that has not answered in 60 s. Start-up does not call the portal, so nothing
   of it logs in. Against a database that refuses connections the start ends after about 10 s with
   `acquiring the database writer lock: connecting to the database for the writer lock timed out`
   (0.1.0 failed at once). The longest stall after the lock's connection drops ends the process
@@ -200,7 +203,7 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   1 because of a failed start-up step or a lost database lock, it writes exactly one JSON `fatal`
   line at `error` level, whose `error` field names the step (for example `acquiring the database
   writer lock: ...`) or starts with `the database lock was lost: the lock's connection`. A
-  configuration error prints its message on stderr and exits 1. The hub restarts the plugin with
+  configuration error prints its message on stderr and exits 1. The hub restarts the monitor with
   a backoff.
 - A query on the lock's connection every 0.5 s, with 30 s to answer, notices a lost lock (see
   Persistence). It reads `pg_locks` and checks that this connection still holds the lock. The
@@ -209,7 +212,7 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   before the migrations stops the start the same way, under the step `applying the database
   migrations`, and nothing is migrated.
 - A second process on the same database cannot take the writer lock and migrates nothing.
-- `Describe` names the plugin `anhanguera` with these event kinds: `welcome`, `invoice_open`,
+- `Describe` names the monitor `anhanguera` with these event kinds: `welcome`, `invoice_open`,
   `payment_due`, `payment_overdue`, `invoice_closed`, `payment_attention`,
   `billing_day_approaching`, `calendar_financial`, `coursework_digest`, `site_changed`,
   `monitor_blind`, `login_failed` and `course_not_found`. Urgent or info is set per event.
@@ -220,14 +223,14 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   unavailable boleto link), and `IDLE` otherwise. When both apply, the message gives the monitor's
   note first and then the cycle's reason, joined by `; `. `Check` starts a cycle now, or refuses
   with `a check is already running`.
-- The monitor serves `Watch` through the SDK's `serve_with_notifier`. It signals at start with the
-  newest stored `seq`, after each committed batch of events, when a cycle starts and ends, when the
-  hub-ahead state changes, and when the first read ends. The signal of a batch comes from
-  `Store::record`, right after the commit and with the highest new `seq` of the batch, so a failed
-  commit, or a batch without a new event, signals nothing. The welcome event has no signal of its
-  own: the signal at start and the one at the end of the first read cover it. A signal never makes
-  the monitor call the portal. Signals carry the `seq` of a stored event, never the sequence's own
-  value.
+- The monitor serves `Watch` through the SDK's `serve`, which receives the notifier. It signals at
+  start with the newest stored `seq`, when the hub-ahead state changes, and in three more places.
+  `Store::record` calls `events_recorded` right after each commit that inserted events, with the
+  highest new `seq` of the batch, so a failed commit, or a batch without a new event, signals
+  nothing. The end of the first read calls it too. `status_scope` signals when a cycle starts and
+  again when it ends, however it ends. The welcome event has no signal of its own: the signal at
+  start and the one at the end of the first read cover it. A signal never makes the monitor call
+  the portal. Signals carry the `seq` of a stored event, never the sequence's own value.
 - `Events(after, limit)` returns the events with a `seq` above `after`, in order. A `limit` of 0
   means 100, and the maximum is 500. Each call acknowledges every event up to `after`, and writes
   the state row only when that position moves forward.
@@ -246,7 +249,7 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   payments streak, the open problems and the pruning) each wait those 10 s. Its failure (`the
   cycle: the database is unavailable; payments: the database is unavailable`) shows in `Status`
   about 40 s after the cycle starts, and `Status` answers `CHECKING` until then.
-- When `the hub is ahead of this database: reset the hub's position for this plugin` appears at
+- When `the hub is ahead of this database: reset the hub's position for this monitor` appears at
   `error` level, the hub asked for events after a `seq` this database never issued: the database
   was reset or replaced and the hub's stored position was not. `Events` returns nothing until the
   two agree. Reset both together. The line is logged once per process.
@@ -440,10 +443,10 @@ The database layer adds these lines to the log. None carries the address or a pa
 
 `anhanguera-monitor probe` exists to compare what the portal really answers with
 `docs/site-api.md`, and it is the first live check of the queries in `queries/`. Run it inside the
-hub's container, with the plugin already started once:
+hub's container, with the monitor already started once:
 
 ```bash
-docker exec monitor-hub /opt/monitor-hub/plugins/anhanguera/anhanguera-monitor probe
+docker exec monitor-hub /opt/monitor-hub/monitors/anhanguera/anhanguera-monitor probe
 ```
 
 - It does not need the hub cookie. It reads the same settings as the monitor. When any variable
@@ -451,7 +454,8 @@ docker exec monitor-hub /opt/monitor-hub/plugins/anhanguera/anhanguera-monitor p
   prefixed names, so the hub's own `DATABASE_URL` never reaches it. With no such variable (a local
   run) it reads only the plain names. It never reads credentials from arguments.
 - It reads the device id from the database (read-only, no migration, no writer lock). With no
-  state row it stops with `start the plugin once first`.
+  state row it stops with `start the monitor once first`. A `DATABASE_URL` the monitor refuses
+  (see Configuration) stops it with the refusal's text on stderr and exit 1.
 - It runs every operation once per enrollment (invoices, a boleto link for each invoice to pay) and
   per configured course (subject deadlines, calendar, unit quizzes), validates the answers with the
   same decoders as the monitor, and prints one JSON line on stdout:

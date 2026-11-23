@@ -58,9 +58,11 @@ account.
 
 ## Running under monitor-hub
 
-The image holds `/plugin/plugin.json`, `/plugin/settings.json` and the binary, and the hub's image
-build copies that directory in. The monitor runs only when the hub starts it with `plugin`. Started
-by hand, it prints the SDK's not-launched message and exits 1.
+The image holds `/monitor/monitor.json`, `/monitor/settings.json` and the binary, and the hub
+copies `/monitor/` to `/opt/monitor-hub/monitors/anhanguera/`. The monitor runs only when the hub
+starts it with `anhanguera-monitor monitor`. Started by hand, it prints the SDK's not-launched
+message and exits 1. The hub's own deploy guide (`docs/deploy.md` in the monitor-hub repository)
+covers how the hub's image gets its monitors.
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -t anhanguera-monitor .
@@ -122,7 +124,7 @@ because the crate is not published.
 token. Start the monitor once first, then run it inside the hub's container:
 
 ```bash
-docker exec monitor-hub /opt/monitor-hub/plugins/anhanguera/anhanguera-monitor probe
+docker exec monitor-hub /opt/monitor-hub/monitors/anhanguera/anhanguera-monitor probe
 ```
 
 Inside the container it reads the `ANHANGUERA__` variables set on the hub and ignores the hub's own
@@ -142,4 +144,4 @@ make up         # a development Postgres on 127.0.0.1:5432
 The tests start their own Postgres unless `TEST_DATABASE_URL` is set, and talk to a fake portal
 only. Use a short `TMPDIR` (the SDK limits Unix socket paths to 100 bytes). When `CI` is set, a
 test that cannot run fails instead of skipping. The conformance test uses the SDK's
-`plugin-conformance` command, built with Go. See `CLAUDE.md` for the details.
+`monitor-conformance` command, built with Go. See `CLAUDE.md` for the details.

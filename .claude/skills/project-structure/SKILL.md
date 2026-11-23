@@ -2,10 +2,10 @@
 name: project-structure
 description: >-
   File structure, module layering and persistence conventions for anhanguera-monitor (a Rust
-  monitor-hub plugin: tonic over the SDK, SeaORM on sqlx with sea-orm-migration, Postgres, a
+  monitor-hub monitor: tonic over the SDK, SeaORM on sqlx with sea-orm-migration, Postgres, a
   GraphQL client for the Anhanguera student portal). Read this before creating or
   moving a module, integration test, test helper, migration, GraphQL document or any
-  config/scaffolding file (Cargo.toml, rust-toolchain.toml, plugin.json, settings.json,
+  config/scaffolding file (Cargo.toml, rust-toolchain.toml, monitor.json, settings.json,
   Dockerfile, compose.yaml, .github/, .githooks/, .env.example), so new code lands where the rest
   already is.
 ---
@@ -22,11 +22,11 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 .
 ├── Cargo.toml                 # package anhanguera-monitor, edition 2024, lib + bin
 ├── Cargo.lock                 # committed; CI and the image build use --locked
-├── rust-toolchain.toml        # the SDK's channel at sdk-rust/v0.3.0, with rustfmt and clippy
-├── plugin.json                # the manifest the hub reads: name anhanguera, command anhanguera-monitor plugin
+├── rust-toolchain.toml        # the SDK's channel at sdk-rust/v0.4.0, with rustfmt and clippy
+├── monitor.json               # the manifest the hub reads: name anhanguera, command anhanguera-monitor monitor
 ├── settings.json              # the settings declaration (version 2); config.rs embeds it
 ├── src/
-│   ├── main.rs                # plugin, probe and validate-settings arguments, logging, runtime, exit code
+│   ├── main.rs                # monitor, probe and validate-settings arguments, logging, runtime, exit code
 │   ├── lib.rs                 # module declarations only
 │   ├── app.rs                 # start-up: lock, migrations, first-read seq, state, portal client, serve
 │   ├── config.rs              # settings document from the environment, validation, Config
@@ -47,7 +47,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 │   ├── store/                 # connection.rs (URL rules, pool), lock.rs (WriterLock), entity/ (one file per table)
 │   ├── monitor.rs             # Monitor: areas, run_cycle, problems, blind and login streaks
 │   ├── scheduler.rs           # periodic loop, trigger, CycleState
-│   ├── server.rs              # AnhangueraPlugin: the plugin contract over the scheduler and the store
+│   ├── server.rs              # AnhangueraMonitor: the monitor contract over the scheduler and the store
 │   ├── probe.rs               # the probe command: response shapes and verdicts
 │   └── logtest.rs             # tests only: captures log events on the calling thread
 ├── queries/                   # the GraphQL documents, embedded with include_str!
@@ -59,7 +59,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 │   ├── ava.rs  store.rs  migration.rs  monitor.rs  scheduler.rs  server.rs  settings.rs  probe.rs
 │   └── end_to_end.rs  entrypoint.rs  conformance.rs
 ├── docs/site-api.md           # facts about the portal's GraphQL API and how each was established
-├── .env.example               # every variable, for compose, the tests and a local plugin run
+├── .env.example               # every variable, for compose, the tests and a local monitor run
 ├── .githooks/                 # commit-msg (Conventional Commits) + pre-commit (cargo fmt, cargo test)
 ├── .github/workflows/         # docker.yml: fmt, clippy and tests against Postgres, then the GHCR image
 ├── .prototools                # proto: pins Go for the conformance test
@@ -70,14 +70,14 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 
 ## Modules
 
-- `main.rs` stays thin. It refuses `plugin` outside the hub, starts logging and the runtime, calls
+- `main.rs` stays thin. It refuses `monitor` outside the hub, starts logging and the runtime, calls
   `app::run`, and turns its error into the single `fatal` log line and exit code 1. `probe` and
   `validate-settings` run without the hub.
 - `app.rs` is the only module that knows every other one. Anything that has to happen before the
   handshake goes in `start_up`, inside the 45 s start-up limit, with a step name for its error.
 - `monitor.rs` holds the cycle logic and depends on the `Portal` trait, not on `ava::AvaClient`,
   so tests can use a fake portal. `scheduler.rs` decides when cycles run, and `server.rs` maps
-  the scheduler and the store onto the plugin contract.
+  the scheduler and the store onto the monitor contract.
 - `payments.rs` and `coursework.rs` are pure planners: they take what the portal said and what the
   store knows, and return the events and keys to record. `monitor.rs` fetches and records.
 - A subject module owns its types and its error enum (`thiserror`). Move a helper only when a
@@ -235,6 +235,6 @@ The database layer adds these lines to the log. None carries the address or a pa
   crate is at least two weeks old.
 - The image builds on the build machine's platform with `cargo zigbuild` for
   `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`. The final stage has only `COPY`
-  instructions, so no emulation is needed. It carries `plugin.json`, `settings.json` and the
+  instructions, so no emulation is needed. It carries `monitor.json`, `settings.json` and the
   binary.
 - Never change the versions pinned in `.prototools`.

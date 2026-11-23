@@ -32,11 +32,11 @@ examples. Each item says how it was established:
 - Answer: `accessToken` (string), `tokenType` (`"Bearer"`), `expiresIn` (`25200`, seconds, so 7
   hours), `scope` (`"read,write"`), `deviceWhiteListed` (boolean). **verified**
 - No captcha is needed. The site runs reCAPTCHA v3 only on the CPF step
-  (`GetStudentUserLoginInfo(username, captcha: CaptchaInput!)`), which the plugin does not call.
+  (`GetStudentUserLoginInfo(username, captcha: CaptchaInput!)`), which the monitor does not call.
   `LoginStudent` has no captcha variable and worked from a script. **verified**
 - A device that was never confirmed gets `deviceWhiteListed: false` **and still a working
   token**: `sofiaGetMe { id }` and `me { id }` returned data with it. The e-mail/SMS code is only
-  asked by the site's login screen (`SendCode`, `ValidateCode`, `WhitelistDevice`). The plugin
+  asked by the site's login screen (`SendCode`, `ValidateCode`, `WhitelistDevice`). The monitor
   never calls those. **verified**
 - There is no refresh token. Log in again when the token expires or a call answers with an
   authentication error. **verified** (no such field exists in the answer)
