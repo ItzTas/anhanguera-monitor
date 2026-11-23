@@ -30,7 +30,7 @@ fn assert_refuses(output: &std::process::Output) {
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8_lossy(&output.stderr).trim(),
-        monitor_hub_plugin::NOT_LAUNCHED_BY_HUB
+        monitor_hub_sdk::NOT_LAUNCHED_BY_HUB
     );
 }
 

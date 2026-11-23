@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use anhanguera_monitor::config::{self, Config};
-use monitor_hub_plugin::{NOT_LAUNCHED_BY_HUB, launched_by_hub, logging};
+use monitor_hub_sdk::{NOT_LAUNCHED_BY_HUB, launched_by_hub, logging};
 use tokio::runtime::{Builder, Runtime};
 use tracing::error;
 

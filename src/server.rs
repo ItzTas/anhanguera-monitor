@@ -4,12 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use chrono::{DateTime, TimeDelta, Utc};
-use monitor_hub_plugin::Notifier;
-use monitor_hub_plugin::proto::plugin_server::Plugin;
-use monitor_hub_plugin::proto::{
+use monitor_hub_sdk::proto::{
     CheckRequest, CheckResponse, DescribeRequest, DescribeResponse, Event, EventKind,
     EventsRequest, EventsResponse, Severity, State, StatusRequest, StatusResponse,
 };
+use monitor_hub_sdk::{Monitor, Notifier};
 use prost_types::Timestamp;
 use tonic::{Request, Response, Status};
 use tracing::{error, warn};
@@ -90,7 +89,7 @@ impl<P: Portal> AnhangueraPlugin<P> {
             return;
         }
         let newest = self.newest_event(last_issued).await;
-        self.notifier().notify(newest);
+        self.notifier().events_recorded(newest);
     }
 
     async fn newest_event(&self, fallback: i64) -> i64 {
@@ -141,7 +140,7 @@ impl<P: Portal> AnhangueraPlugin<P> {
 }
 
 #[tonic::async_trait]
-impl<P: Portal> Plugin for AnhangueraPlugin<P> {
+impl<P: Portal> Monitor for AnhangueraPlugin<P> {
     async fn describe(
         &self,
         _: Request<DescribeRequest>,
@@ -294,8 +293,8 @@ mod tests {
     use crate::postgres::database;
     use chrono::{DateTime, NaiveDate, Utc};
     use chrono_tz::Tz;
-    use monitor_hub_plugin::proto::plugin_server::Plugin;
-    use monitor_hub_plugin::proto::{EventsRequest, State, StatusRequest};
+    use monitor_hub_sdk::Monitor as _;
+    use monitor_hub_sdk::proto::{EventsRequest, State, StatusRequest};
     use serde_json::{Value, json};
     use tokio::net::TcpListener;
     use tokio::runtime::{Builder, Runtime};
@@ -514,7 +513,7 @@ mod tests {
         assert_eq!(
             manifest,
             json!({
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "name": "anhanguera",
                 "command": ["anhanguera-monitor", "plugin"],
             })

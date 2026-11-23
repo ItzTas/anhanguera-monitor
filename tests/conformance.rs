@@ -3,7 +3,7 @@ pub mod support;
 use std::time::Duration;
 
 use anhanguera_monitor::store::Store;
-use monitor_hub_plugin_testkit::conformance::{Conformance, Outcome, run};
+use monitor_hub_sdk_testkit::conformance::{Conformance, Outcome, run};
 
 use support::fake_ava::FakeAva;
 use support::process::{SocketDir, plugin_env};

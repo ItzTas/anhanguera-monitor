@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use monitor_hub_plugin::{MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE};
+use monitor_hub_sdk::{MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE};
 
 const HANDSHAKE_LIMIT: Duration = Duration::from_secs(30);
 const PIPE_LIMIT: Duration = Duration::from_secs(5);
@@ -234,7 +234,7 @@ fn read_all(pipe: impl Read + Send + 'static) -> Receiver<String> {
 
 fn handshake_socket(line: &str) -> Option<PathBuf> {
     let fields: Vec<&str> = line.trim().split('|').collect();
-    let ["1", "1", "unix", socket, "grpc"] = fields[..] else {
+    let ["1", "2", "unix", socket, "grpc"] = fields[..] else {
         return None;
     };
     Some(PathBuf::from(socket))

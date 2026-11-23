@@ -7,7 +7,7 @@ use chrono::{DateTime, NaiveDate, SecondsFormat, TimeDelta, Utc};
 use chrono_tz::Tz;
 use futures_util::future::join_all;
 use futures_util::stream::{self, StreamExt};
-use monitor_hub_plugin::Notifier;
+use monitor_hub_sdk::Notifier;
 use tracing::{error, warn};
 
 use crate::ava::AvaError;

@@ -12,8 +12,8 @@ use anhanguera_monitor::scheduler::Scheduler;
 use anhanguera_monitor::server::AnhangueraPlugin;
 use anhanguera_monitor::store::Store;
 use chrono::{DateTime, TimeDelta, Utc};
-use monitor_hub_plugin::proto::plugin_server::Plugin;
-use monitor_hub_plugin::proto::{
+use monitor_hub_sdk::Monitor as _;
+use monitor_hub_sdk::proto::{
     CheckRequest, CheckResponse, DescribeRequest, Event, EventKind, EventsRequest, Severity, State,
     StatusRequest, StatusResponse,
 };

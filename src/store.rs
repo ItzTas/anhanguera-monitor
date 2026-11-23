@@ -9,7 +9,7 @@ use crate::events::{Kind, NewEvent};
 use chrono::{DateTime, NaiveDate, Utc};
 use connection::{Limits, POOL_LIMITS, database_options, pool};
 use entity::{enrollments, events, invoices, monitor_state, problems, sent_keys};
-use monitor_hub_plugin::Notifier;
+use monitor_hub_sdk::Notifier;
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, ConnAcquireErr, ConnectionTrait, DatabaseConnection,
@@ -287,7 +287,7 @@ impl Store {
         let Some(seq) = highest else {
             return Ok(None);
         };
-        self.notifier.notify(seq);
+        self.notifier.events_recorded(seq);
         Ok(Some(seq))
     }
 

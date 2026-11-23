@@ -12,7 +12,7 @@ use anhanguera_monitor::migration::Migrator;
 use anhanguera_monitor::store::WRITER_LOCK_ID;
 use anhanguera_monitor::timestamp::Clock;
 use chrono::{DateTime, TimeDelta, Utc};
-use monitor_hub_plugin::Signals;
+use monitor_hub_sdk::Signals;
 use sea_orm::{ConnectOptions, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 use tokio::time::timeout;

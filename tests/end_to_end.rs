@@ -4,9 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anhanguera_monitor::migration::{DROP_GOOSE_DB_VERSION, GOOSE_SCHEMA};
-use monitor_hub_plugin::proto::{
-    Event, EventsRequest, EventsResponse, WatchRequest, WatchResponse,
-};
+use monitor_hub_sdk::proto::{Event, EventsRequest, EventsResponse, WatchRequest, WatchResponse};
 use serde_json::Value;
 use support::{admin, database};
 use tokio::time::{Instant, timeout_at};
@@ -39,7 +37,7 @@ async fn events(socket: &Path, after: i64) -> Vec<Event> {
         .await
         .unary(
             Request::new(EventsRequest { after, limit: 100 }),
-            PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Events"),
+            PathAndQuery::from_static("/monitorhub.monitor.v1.Monitor/Events"),
             ProstCodec::<EventsRequest, EventsResponse>::default(),
         )
         .await
@@ -53,7 +51,7 @@ async fn watch(socket: &Path) -> Streaming<WatchResponse> {
         .await
         .server_streaming(
             Request::new(WatchRequest {}),
-            PathAndQuery::from_static("/monitorhub.plugin.v1.Plugin/Watch"),
+            PathAndQuery::from_static("/monitorhub.monitor.v1.Monitor/Watch"),
             ProstCodec::<WatchRequest, WatchResponse>::default(),
         )
         .await
