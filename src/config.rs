@@ -173,8 +173,12 @@ fn build(
     if !type_problems.is_empty() {
         return Err(type_problems);
     }
-    let raw: RawConfig = serde_json::from_value(document.clone())
-        .map_err(|err| vec![Problem::new("", err.to_string())])?;
+    let raw: RawConfig = serde_json::from_value(document.clone()).map_err(|_| {
+        vec![Problem::new(
+            "",
+            "the configuration document does not match settings.json",
+        )]
+    })?;
     let mut problems = Vec::new();
     let database_url = secret_or_file(
         "database_url",
@@ -297,7 +301,7 @@ fn build(
     })
 }
 
-// Runs before serde, whose errors quote the refused value: this names the path only.
+// Runs before serde so a wrong type is named by its path, not by the general mismatch problem.
 fn type_problems(document: &Value) -> Vec<Problem> {
     declared_fields()
         .iter()
@@ -928,13 +932,21 @@ mod tests {
     }
 
     #[test]
-    fn an_undeclared_field_is_refused() {
+    fn a_document_that_does_not_match_is_one_fixed_general_problem() {
         let mut document = full_document();
         document.remove("database_url_file");
         document.remove("ava_password_file");
-        document.insert("unknown_field".to_owned(), Value::from(1));
+        document.insert("leaky_field".to_owned(), Value::from(1));
 
-        assert!(Config::from_document(&Value::Object(document), &|_| Ok(String::new())).is_err());
+        let problems = validate(&Value::Object(document));
+
+        assert_eq!(
+            problems,
+            vec![Problem::new(
+                "",
+                "the configuration document does not match settings.json"
+            )]
+        );
     }
 
     #[test]
