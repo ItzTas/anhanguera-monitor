@@ -2,7 +2,7 @@ use std::fmt;
 
 use zeroize::Zeroizing;
 
-pub const REDACTED: &str = "[redacted]";
+const REDACTED: &str = "[redacted]";
 
 #[derive(Clone, Default)]
 pub struct Secret(Zeroizing<String>);
