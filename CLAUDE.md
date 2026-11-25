@@ -8,7 +8,7 @@ A monitor-hub monitor. It reads a student's account on the Anhanguera student po
 records events: an invoice to pay, a payment about to fall due, coursework about to close, and an
 urgent event whenever it cannot read the portal. The hub reads those events and sends the
 notifications. The monitor is written in Rust on the monitor-hub SDK (`monitor-hub-sdk`, git tag
-`sdk-rust/v0.4.0`).
+`sdk-rust/v0.5.0`).
 
 Payments come first. Coursework follows, for the courses named in `COURSES`. The academic
 calendar is a safety net. When the monitor cannot read the portal it says so: a page it could not
@@ -85,10 +85,13 @@ skipping.
   losing a row, and that the second drops `goose_db_version`.
 - `sh` with `kill` for the tests that start the binary and signal it.
 - The conformance command for `tests/conformance.rs`: the binary named by `MONITOR_CONFORMANCE`,
-  or else `go install` of `monitor-conformance` at the SDK's Go tag `sdk-go/v0.6.0`, cached under
+  or else `go install` of `monitor-conformance` at the SDK's Go tag `sdk-go/v0.7.0`, cached under
   `~/.cache/monitor-hub/monitor-conformance/`. It fails a monitor whose `Watch` answers
-  `UNIMPLEMENTED`. The test does not pass `monitor_dir`, because `monitor-conformance` v0.6.0
-  accepts only `settings_version` 1 and `settings.json` is version 2.
+  `UNIMPLEMENTED`. The test passes `monitor_dir`, so the command also checks `settings.json` and
+  runs `validate-settings` with an empty environment.
+- `tests/settings.rs` checks `settings.json` and the validator with the testkit's `check`, the
+  configuration structure with `assert_no_drift`, and a document on descriptor 3 with
+  `command_with_document`, which needs `sh`.
 - The portal is a fake GraphQL server (`tests/support/fake_ava.rs`) that serves the fictitious
   answers in `testdata/ava/`. Cycle tests use a fake `Portal` (`tests/support/fake_portal.rs`).
 
@@ -117,12 +120,22 @@ compute the same tag.
 ## Configuration
 
 `settings.json` (version 2) declares every setting, with its default, and `src/config.rs` embeds
-it. The image ships it as `/monitor/settings.json`, and this version of the hub does not read it.
-Under monitor-hub, set them on the hub with the `ANHANGUERA__` prefix
+it as `SETTINGS_JSON`. The image ships it as `/monitor/settings.json`. Each field has a `group`
+for the hub's settings page. The monitor reads one JSON document through the SDK
+(`monitor_hub_sdk::config::load`). When `MONITOR_HUB_CONFIG_FD` names a descriptor, the document
+is what the hub wrote there, read once at start and then closed. Without that variable, the SDK
+builds the document from the variables below. In both cases the defaults come from the
+declaration, and the code has none of its own. `RawConfig` mirrors the declaration and refuses
+unknown keys: a document that does not fit it is refused with `the configuration document does
+not match settings.json`, and a value of the wrong type with `must be <type>` at its path, never
+with the value. **A new setting is a new field in `settings.json` and in `RawConfig`**, and
+`the_configuration_structure_matches_the_declaration` fails until the two agree.
+
+Under monitor-hub, set the variables on the hub with the `ANHANGUERA__` prefix
 (`ANHANGUERA__COURSES` and so on). The hub removes the prefix before it starts the monitor. The
-monitor reads only its environment, never a `.env` file. `.env.example` lists every variable
-except `AVA_GRAPHQL_URL`, which only the tests set. The password is set by `AVA_PASSWORD` or
-`AVA_PASSWORD_FILE`, the database address by `DATABASE_URL` or `DATABASE_URL_FILE`, never both.
+monitor never reads a `.env` file. `.env.example` lists every variable except `AVA_GRAPHQL_URL`,
+which only the tests set. The password is set by `AVA_PASSWORD` or `AVA_PASSWORD_FILE`, the
+database address by `DATABASE_URL` or `DATABASE_URL_FILE`, never both.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -136,12 +149,21 @@ except `AVA_GRAPHQL_URL`, which only the tests set. The password is set by `AVA_
 | `BOLETO_LINK` | `true` | Put the boleto link in payment events. |
 | `BILLING_DAY_NET` | `auto` | `auto` (learned, 3 days until learned), a day count from 1 to 28, or `off`. |
 | `DEADLINE_REMINDER_DAYS` | `7,3,1` | Days before a coursework deadline to remind, each from 0 to 60. |
-| `CALENDAR_CATEGORIES` | `FINANCIAL,SECRETARIAT,UNIQUE_EVENTS` | Subset of those three; empty means none. |
+| `CALENDAR_CATEGORIES` | `FINANCIAL,SECRETARIAT,UNIQUE_EVENTS` | Subset of those three. Empty takes the default; a list with no item (`,`) means none. |
 | `REMINDER_HOUR` | `9` | Local hour, 0 to 23, from which scheduled reminders go out. |
 | `FAILING_ALERT_AFTER` | `24h` | How long payments must keep failing before `monitor_blind`. At least `1h`. |
 | `AVA_TIMEZONE` | `America/Sao_Paulo` | An IANA name. Nothing reads `TZ`. |
 | `LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn` or `error`. |
 | `AVA_GRAPHQL_URL` | the portal's endpoint | Tests only. Not editable from the hub. |
+
+When the SDK builds the document from the variables, an empty variable takes the default. A list
+is split on `,`, each item trimmed and empty items dropped. Text that does not convert to the
+declared type stops the load with `<VARIABLE> is not an integer ("x")` or `<VARIABLE> is not true
+or false ("x")` at the field's path (`payment_reminder_days[1]` for an item), and such problems
+come alone: the monitor's own checks do not run. A secret's text never appears in them. A value
+that is not UTF-8 is refused in a secret field (`AVA_PASSWORD is not valid UTF-8`) and read with
+U+FFFD in place of the bad bytes in the others, where the monitor's own rules accept or refuse it.
+Durations are `0` or a whole number followed by `s`, `m` or `h`.
 
 `DATABASE_URL` is `postgres://user:password@host:port/database?sslmode=disable` (`postgresql://`
 works too). Put the host, port, user, password and database in the URL.
@@ -181,8 +203,14 @@ works too). Put the host, port, user, password and database in the URL.
   command prints the same text on stderr and exits 1.
 
 The hub also passes `PATH`, `TZ`, `TMPDIR` and `MONITOR_HUB_DATA_DIR`. The monitor ignores `TZ`
-and keeps all its state in Postgres. `anhanguera-monitor validate-settings` checks the
-environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when there are none.
+and keeps all its state in Postgres.
+
+`anhanguera-monitor validate-settings` reads the document the way the start does (descriptor or
+environment). It reads no `_FILE` file, opens no database or portal connection and starts no log.
+When it finds no other problem, it checks `database_url` with the start's rules, without
+connecting, and refuses an address the start would refuse, with the same text. It prints
+`{"problems":[{"path","message"}]}` and exits 0 when there are no problems, 1 when there are. No
+answer carries a secret.
 
 ## Process contract
 
@@ -203,8 +231,10 @@ environment and prints `{"problems": [{"path", "message"}]}`; it exits 0 when th
   1 because of a failed start-up step or a lost database lock, it writes exactly one JSON `fatal`
   line at `error` level, whose `error` field names the step (for example `acquiring the database
   writer lock: ...`) or starts with `the database lock was lost: the lock's connection`. A
-  configuration error prints its message on stderr and exits 1. The hub restarts the monitor with
-  a backoff.
+  configuration error prints every problem on one stderr line, each as `path: message` (or the
+  message alone when it has no path), joined by `; `, and exits 1. The configuration is loaded and
+  the descriptor closed before the log, the runtime or any connection starts. The hub restarts the
+  monitor with a backoff.
 - A query on the lock's connection every 0.5 s, with 30 s to answer, notices a lost lock (see
   Persistence). It reads `pg_locks` and checks that this connection still holds the lock. The
   reason after `the database lock was lost: ` is `the lock's connection failed: ...`, `the lock's
@@ -449,10 +479,11 @@ hub's container, with the monitor already started once:
 docker exec monitor-hub /opt/monitor-hub/monitors/anhanguera/anhanguera-monitor probe
 ```
 
-- It does not need the hub cookie. It reads the same settings as the monitor. When any variable
-  whose name starts with `ANHANGUERA__` is set, as inside the hub's container, it reads only the
-  prefixed names, so the hub's own `DATABASE_URL` never reaches it. With no such variable (a local
-  run) it reads only the plain names. It never reads credentials from arguments.
+- It does not need the hub cookie. It builds the document from the variables only, never from
+  the hub's descriptor, with the monitor's settings and rules. When any variable whose name starts
+  with `ANHANGUERA__` is set, as inside the hub's container, it reads only the prefixed names, so
+  the hub's own `DATABASE_URL` never reaches it. With no such variable (a local run) it reads only
+  the plain names. It never reads credentials from arguments.
 - It reads the device id from the database (read-only, no migration, no writer lock). With no
   state row it stops with `start the monitor once first`. A `DATABASE_URL` the monitor refuses
   (see Configuration) stops it with the refusal's text on stderr and exit 1.

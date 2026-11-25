@@ -22,14 +22,14 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 .
 ├── Cargo.toml                 # package anhanguera-monitor, edition 2024, lib + bin
 ├── Cargo.lock                 # committed; CI and the image build use --locked
-├── rust-toolchain.toml        # the SDK's channel at sdk-rust/v0.4.0, with rustfmt and clippy
+├── rust-toolchain.toml        # the SDK's channel at sdk-rust/v0.5.0, with rustfmt and clippy
 ├── monitor.json               # the manifest the hub reads: name anhanguera, command anhanguera-monitor monitor
 ├── settings.json              # the settings declaration (version 2); config.rs embeds it
 ├── src/
 │   ├── main.rs                # monitor, probe and validate-settings arguments, logging, runtime, exit code
 │   ├── lib.rs                 # module declarations only
 │   ├── app.rs                 # start-up: lock, migrations, first-read seq, state, portal client, serve
-│   ├── config.rs              # settings document from the environment, validation, Config
+│   ├── config.rs              # the configuration document through the SDK (descriptor or environment), the monitor's rules, Config
 │   ├── secret.rs              # Secret: prints [redacted], zeroed on drop
 │   ├── timestamp.rs           # Clock
 │   ├── dates.rs               # local dates in AVA_TIMEZONE, portal date parsing, reminder instants, event-text dates
@@ -210,6 +210,8 @@ The database layer adds these lines to the log. None carries the address or a pa
   compares schemas. `tests/migration.rs` covers the adoption.
 - A test that needs something outside the crate (Postgres, `sh`, the conformance command) prints a
   `skipping:` notice and returns when it is missing, and panics when `CI` is set and not empty.
+- A test that hands the binary a configuration document uses the testkit's
+  `command_with_document`, which puts it on descriptor 3 and needs `sh`.
 - No test talks to the real portal. Fixtures are fictitious.
 - `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings` and
   `CI=1 cargo test` must pass.

@@ -30,7 +30,10 @@ boleto payment often clears overnight). Everything else goes out as soon as a cy
 
 ## Configuration
 
-Every setting is declared in `settings.json`. Under monitor-hub, set them on the hub with the
+Every setting is declared in `settings.json`, with its default. The monitor reads its
+configuration as one JSON document. A hub that hands the document over writes it, at every start,
+on the descriptor named by `MONITOR_HUB_CONFIG_FD`. Without that descriptor, the monitor builds
+the same document from the variables below. Under monitor-hub, set them on the hub with the
 `ANHANGUERA__` prefix, for example `ANHANGUERA__COURSES`. The hub removes the prefix before it
 starts the monitor. `.env.example` lists every variable.
 
@@ -46,7 +49,7 @@ starts the monitor. `.env.example` lists every variable.
 | `BOLETO_LINK` | `true` | Include the boleto link in payment events. |
 | `BILLING_DAY_NET` | `auto` | Days before the due day to warn when no invoice shows: `auto`, 1 to 28, or `off`. |
 | `DEADLINE_REMINDER_DAYS` | `7,3,1` | Days before a coursework deadline to remind, each from 0 to 60. |
-| `CALENDAR_CATEGORIES` | `FINANCIAL,SECRETARIAT,UNIQUE_EVENTS` | Which calendar events to report. |
+| `CALENDAR_CATEGORIES` | `FINANCIAL,SECRETARIAT,UNIQUE_EVENTS` | Which calendar events to report. Empty takes the default; `,` reports none. |
 | `REMINDER_HOUR` | `9` | Local hour, 0 to 23, from which reminders go out. |
 | `FAILING_ALERT_AFTER` | `24h` | How long payments must keep failing before the urgent alert. At least `1h`. |
 | `AVA_TIMEZONE` | `America/Sao_Paulo` | An IANA time zone name. |
@@ -61,8 +64,9 @@ account.
 The image holds `/monitor/monitor.json`, `/monitor/settings.json` and the binary, and the hub
 copies `/monitor/` to `/opt/monitor-hub/monitors/anhanguera/`. The monitor runs only when the hub
 starts it with `anhanguera-monitor monitor`. Started by hand, it prints the SDK's not-launched
-message and exits 1. The hub's own deploy guide (`docs/deploy.md` in the monitor-hub repository)
-covers how the hub's image gets its monitors.
+message and exits 1. When `MONITOR_HUB_CONFIG_FD` is set, the monitor reads the configuration
+document from that descriptor once, at start, and closes it. The hub's own deploy guide
+(`docs/deploy.md` in the monitor-hub repository) covers how the hub's image gets its monitors.
 
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -t anhanguera-monitor .
@@ -129,6 +133,7 @@ docker exec monitor-hub /opt/monitor-hub/monitors/anhanguera/anhanguera-monitor 
 
 Inside the container it reads the `ANHANGUERA__` variables set on the hub and ignores the hub's own
 `DATABASE_URL`. Run anywhere else, with no `ANHANGUERA__` variable set, it reads the plain names.
+It reads only variables, never the configuration document a hub hands to the monitor.
 
 It prints one JSON line with the shape and a verdict for each operation. It exits 0 when every
 verdict is `ok`, 2 when some are not, and 1 when it could not run. Compare the shapes with
