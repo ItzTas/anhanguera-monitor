@@ -72,7 +72,7 @@ pub struct RawConfig {
     #[serde(default)]
     check_interval: Option<String>,
     #[serde(default)]
-    payment_reminder_days: Vec<i64>,
+    payment_reminder_days: Option<Vec<i64>>,
     #[serde(default)]
     payment_overdue_repeat: Option<String>,
     #[serde(default)]
@@ -80,9 +80,9 @@ pub struct RawConfig {
     #[serde(default)]
     billing_day_net: Option<String>,
     #[serde(default)]
-    deadline_reminder_days: Vec<i64>,
+    deadline_reminder_days: Option<Vec<i64>>,
     #[serde(default)]
-    calendar_categories: Vec<String>,
+    calendar_categories: Option<Vec<String>>,
     #[serde(default)]
     reminder_hour: Option<i64>,
     #[serde(default)]
@@ -209,14 +209,21 @@ fn build(
         &mut problems,
     );
     let payment_overdue_repeat = overdue_repeat(&raw.payment_overdue_repeat, &mut problems);
-    let payment_reminder_days = reminder_days(
+    let payment_reminder_days = required(
         "payment_reminder_days",
-        &raw.payment_reminder_days,
+        raw.payment_reminder_days,
         &mut problems,
-    );
-    let deadline_reminder_days = reminder_days(
+    )
+    .and_then(|days| reminder_days("payment_reminder_days", &days, &mut problems));
+    let deadline_reminder_days = required(
         "deadline_reminder_days",
-        &raw.deadline_reminder_days,
+        raw.deadline_reminder_days,
+        &mut problems,
+    )
+    .and_then(|days| reminder_days("deadline_reminder_days", &days, &mut problems));
+    let calendar_categories = required(
+        "calendar_categories",
+        raw.calendar_categories,
         &mut problems,
     );
     let billing_day_net = billing_day_net(&raw.billing_day_net, &mut problems);
@@ -241,6 +248,7 @@ fn build(
         Some(boleto_link),
         Some(billing_day_net),
         Some(deadline_reminder_days),
+        Some(calendar_categories),
         Some(reminder_hour),
         Some(failing_alert_after),
         Some(timezone),
@@ -256,6 +264,7 @@ fn build(
         boleto_link,
         billing_day_net,
         deadline_reminder_days,
+        calendar_categories,
         reminder_hour,
         failing_alert_after,
         timezone,
@@ -279,7 +288,7 @@ fn build(
         boleto_link,
         billing_day_net,
         deadline_reminder_days,
-        calendar_categories: raw.calendar_categories,
+        calendar_categories,
         reminder_hour,
         failing_alert_after,
         timezone,
@@ -926,6 +935,26 @@ mod tests {
         document.insert("unknown_field".to_owned(), Value::from(1));
 
         assert!(Config::from_document(&Value::Object(document), &|_| Ok(String::new())).is_err());
+    }
+
+    #[test]
+    fn defaulted_lists_have_no_default_in_the_code() {
+        for name in [
+            "payment_reminder_days",
+            "deadline_reminder_days",
+            "calendar_categories",
+        ] {
+            let mut document = full_document();
+            document.remove("database_url_file");
+            document.remove("ava_password_file");
+            document.remove(name);
+
+            let problems = Config::from_document(&Value::Object(document), &|_| Ok(String::new()))
+                .err()
+                .map(|err| err.problems);
+
+            assert_eq!(problems, Some(vec![Problem::new(name, "is required")]));
+        }
     }
 
     #[test]
