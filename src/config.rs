@@ -985,6 +985,30 @@ mod tests {
     }
 
     #[test]
+    fn every_field_has_a_group() {
+        let declaration = settings::parse(SETTINGS_JSON.as_bytes()).expect("a valid declaration");
+        let mut groups: Vec<&str> = Vec::new();
+        for field in &declaration.fields {
+            let group = field.group.as_deref().unwrap_or_default();
+            assert!(!group.is_empty(), "{} has no group", field.name);
+            if !groups.contains(&group) {
+                groups.push(group);
+            }
+        }
+
+        assert_eq!(
+            groups,
+            [
+                "Storage and logging",
+                "AVA account",
+                "What to watch",
+                "Schedule",
+                "Notifications",
+            ]
+        );
+    }
+
+    #[test]
     fn the_declaration_keeps_secrets_and_files_out_of_the_page() {
         let declaration = settings::parse(SETTINGS_JSON.as_bytes()).expect("a valid declaration");
         let names = |keep: fn(&Field) -> bool| -> BTreeSet<&str> {
