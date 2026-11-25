@@ -100,17 +100,21 @@ pub fn spawn_monitor(env: &[(String, String)]) -> RunningMonitor {
     spawned
 }
 
-// Waits for the end of stderr, which comes when the process exits.
 pub fn run_to_exit(env: &[(String, String)], limit: Duration) -> Exited {
-    let mut child = start(env);
+    run_limited(monitor_command(env), limit)
+}
+
+// Waits for the end of stderr, which comes when the process exits.
+pub fn run_limited(mut command: Command, limit: Duration) -> Exited {
+    let mut child = spawn_piped(&mut command);
     let stdout = read_all(child.stdout.take().expect("piped stdout"));
     let stderr = read_all(child.stderr.take().expect("piped stderr"));
     let Ok(stderr) = stderr.recv_timeout(limit) else {
         let _ = child.kill();
         let _ = child.wait();
-        panic!("the monitor did not exit within {limit:?}");
+        panic!("the command did not exit within {limit:?}");
     };
-    let status = child.wait().expect("wait for the monitor");
+    let status = child.wait().expect("wait for the command");
     let stdout = stdout
         .recv_timeout(PIPE_LIMIT)
         .unwrap_or_else(|_| "<the pipe stayed open>".to_owned());
@@ -122,16 +126,26 @@ pub fn run_to_exit(env: &[(String, String)], limit: Duration) -> Exited {
 }
 
 fn start(env: &[(String, String)]) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_anhanguera-monitor"))
+    spawn_piped(&mut monitor_command(env))
+}
+
+fn monitor_command(env: &[(String, String)]) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_anhanguera-monitor"));
+    command
         .arg("monitor")
         .env_clear()
         .env(MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE)
-        .envs(env.iter().map(|(name, value)| (name, value)))
+        .envs(env.iter().map(|(name, value)| (name, value)));
+    command
+}
+
+fn spawn_piped(command: &mut Command) -> Child {
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("start the monitor")
+        .expect("start the command")
 }
 
 pub fn require_sh() -> bool {

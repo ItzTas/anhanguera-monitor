@@ -1,10 +1,10 @@
 use std::error::Error;
 use std::ffi::OsString;
-use std::io::Write;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use anhanguera_monitor::config::{self, Config};
+use monitor_hub_sdk::settings::{self, VALIDATE_SETTINGS_ARG};
 use monitor_hub_sdk::{NOT_LAUNCHED_BY_HUB, launched_by_hub, logging};
 use tokio::runtime::{Builder, Runtime};
 use tracing::error;
@@ -13,8 +13,8 @@ const RUNTIME_SHUTDOWN_LIMIT: Duration = Duration::from_millis(500);
 
 fn main() -> ExitCode {
     let arguments: Vec<OsString> = std::env::args_os().skip(1).collect();
-    if arguments == ["validate-settings"] {
-        return validate_settings();
+    if arguments == [VALIDATE_SETTINGS_ARG] {
+        return settings::answer(&config::validate_settings());
     }
     if arguments == ["probe"] {
         return anhanguera_monitor::probe::run();
@@ -23,30 +23,6 @@ fn main() -> ExitCode {
         return run_monitor();
     }
     eprintln!("{NOT_LAUNCHED_BY_HUB}");
-    ExitCode::FAILURE
-}
-
-fn validate_settings() -> ExitCode {
-    let (document, mut problems) =
-        config::partial_document_from_env(&|name| std::env::var(name).ok());
-    let known: Vec<String> = problems.iter().map(|p| p.path.clone()).collect();
-    problems.extend(
-        config::validate(&document)
-            .into_iter()
-            .filter(|p| !known.contains(&p.path)),
-    );
-    let answer = serde_json::json!({
-        "problems": problems
-            .iter()
-            .map(|p| serde_json::json!({"path": p.path, "message": p.message}))
-            .collect::<Vec<_>>(),
-    });
-    if writeln!(std::io::stdout(), "{answer}").is_err() {
-        return ExitCode::from(2);
-    }
-    if problems.is_empty() {
-        return ExitCode::SUCCESS;
-    }
     ExitCode::FAILURE
 }
 

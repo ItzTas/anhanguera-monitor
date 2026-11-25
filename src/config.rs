@@ -3,6 +3,7 @@ use std::io;
 use std::str::FromStr;
 use std::time::Duration;
 
+use monitor_hub_sdk::settings::Problem;
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -16,23 +17,8 @@ const MAXIMUM_REMINDER_DAY: i64 = 60;
 const USERNAME_DIGITS: usize = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathProblem {
-    pub path: String,
-    pub message: String,
-}
-
-impl PathProblem {
-    fn new(path: &str, message: impl Into<String>) -> PathProblem {
-        PathProblem {
-            path: path.to_owned(),
-            message: message.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigError {
-    pub problems: Vec<PathProblem>,
+    pub problems: Vec<Problem>,
 }
 
 impl fmt::Display for ConfigError {
@@ -40,7 +26,10 @@ impl fmt::Display for ConfigError {
         let joined: Vec<String> = self
             .problems
             .iter()
-            .map(|p| format!("{}: {}", p.path, p.message))
+            .map(|p| match p.path.as_str() {
+                "" => p.message.clone(),
+                path => format!("{path}: {}", p.message),
+            })
             .collect();
         f.write_str(&joined.join("; "))
     }
@@ -130,14 +119,24 @@ impl Config {
     }
 }
 
-pub fn validate(document: &Value) -> Vec<PathProblem> {
+pub fn validate_settings() -> Vec<Problem> {
+    let (document, mut problems) = partial_document_from_env(&|name| std::env::var(name).ok());
+    let known: Vec<String> = problems.iter().map(|p| p.path.clone()).collect();
+    problems.extend(
+        validate(&document)
+            .into_iter()
+            .filter(|p| !known.contains(&p.path)),
+    );
+    problems
+}
+
+fn validate(document: &Value) -> Vec<Problem> {
+    // The validator never touches the disk, so a file field reads as a placeholder.
     let placeholder = |_: &str| Ok("x".to_owned());
     build(document, &placeholder).err().unwrap_or_default()
 }
 
-pub fn document_from_env(
-    lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Value, Vec<PathProblem>> {
+pub fn document_from_env(lookup: &dyn Fn(&str) -> Option<String>) -> Result<Value, Vec<Problem>> {
     let (document, problems) = partial_document_from_env(lookup);
     if problems.is_empty() {
         return Ok(document);
@@ -145,9 +144,7 @@ pub fn document_from_env(
     Err(problems)
 }
 
-pub fn partial_document_from_env(
-    lookup: &dyn Fn(&str) -> Option<String>,
-) -> (Value, Vec<PathProblem>) {
+fn partial_document_from_env(lookup: &dyn Fn(&str) -> Option<String>) -> (Value, Vec<Problem>) {
     let mut document = Map::new();
     let mut problems = Vec::new();
     for field in declared_fields() {
@@ -170,7 +167,7 @@ pub fn partial_document_from_env(
                 } else {
                     bad.text
                 };
-                problems.push(PathProblem::new(
+                problems.push(Problem::new(
                     &name,
                     format!("{env} is not {} (\"{shown}\")", bad.kind),
                 ));
@@ -234,13 +231,13 @@ fn convert_one(kind: &str, text: &str) -> Result<Value, BadText> {
 fn build(
     document: &Value,
     read_file: &dyn Fn(&str) -> io::Result<String>,
-) -> Result<Config, Vec<PathProblem>> {
+) -> Result<Config, Vec<Problem>> {
     let type_problems = type_problems(document);
     if !type_problems.is_empty() {
         return Err(type_problems);
     }
     let raw: RawConfig = serde_json::from_value(document.clone())
-        .map_err(|err| vec![PathProblem::new("", err.to_string())])?;
+        .map_err(|err| vec![Problem::new("", err.to_string())])?;
     let mut problems = Vec::new();
     let database_url = secret_or_file(
         "database_url",
@@ -260,10 +257,7 @@ fn build(
     );
     let username = username(&raw.ava_username, &mut problems);
     if raw.courses.is_empty() {
-        problems.push(PathProblem::new(
-            "courses",
-            "at least one course is required",
-        ));
+        problems.push(Problem::new("courses", "at least one course is required"));
     }
     let check_interval = duration_at_least(
         "check_interval",
@@ -357,7 +351,8 @@ fn build(
     })
 }
 
-fn type_problems(document: &Value) -> Vec<PathProblem> {
+// Runs before serde, whose errors quote the refused value: this names the path only.
+fn type_problems(document: &Value) -> Vec<Problem> {
     declared_fields()
         .iter()
         .filter_map(|field| {
@@ -367,12 +362,12 @@ fn type_problems(document: &Value) -> Vec<PathProblem> {
             if has_kind(&kind, value) {
                 return None;
             }
-            Some(PathProblem::new(&name, format!("must be {kind}")))
+            Some(Problem::new(&name, format!("must be {kind}")))
         })
         .collect()
 }
 
-fn choice_problems(document: &Value) -> Vec<PathProblem> {
+fn choice_problems(document: &Value) -> Vec<Problem> {
     declared_fields()
         .iter()
         .filter_map(|field| {
@@ -386,7 +381,7 @@ fn choice_problems(document: &Value) -> Vec<PathProblem> {
             if values.iter().all(allowed) {
                 return None;
             }
-            Some(PathProblem::new(
+            Some(Problem::new(
                 &name,
                 format!("{rule} be one of {}", options.join(", ")),
             ))
@@ -432,9 +427,9 @@ fn has_kind(kind: &str, value: &Value) -> bool {
     }
 }
 
-fn required<T>(path: &str, value: Option<T>, problems: &mut Vec<PathProblem>) -> Option<T> {
+fn required<T>(path: &str, value: Option<T>, problems: &mut Vec<Problem>) -> Option<T> {
     if value.is_none() {
-        problems.push(PathProblem::new(path, "is required"));
+        problems.push(Problem::new(path, "is required"));
     }
     value
 }
@@ -445,20 +440,20 @@ fn secret_or_file(
     file_path: &str,
     file: &Option<String>,
     read_file: &dyn Fn(&str) -> io::Result<String>,
-    problems: &mut Vec<PathProblem>,
+    problems: &mut Vec<Problem>,
 ) -> Option<Secret> {
     let value = value.as_deref().filter(|v| !v.is_empty());
     let file = file.as_deref().filter(|f| !f.is_empty());
     let (value, file) = match (value, file) {
         (Some(_), Some(_)) => {
-            problems.push(PathProblem::new(
+            problems.push(Problem::new(
                 path,
                 format!("set {path} or {file_path}, not both"),
             ));
             return None;
         }
         (None, None) => {
-            problems.push(PathProblem::new(
+            problems.push(Problem::new(
                 path,
                 format!("{path} or {file_path} is required"),
             ));
@@ -472,21 +467,21 @@ fn secret_or_file(
     let content = match file.map(read_file) {
         Some(Ok(content)) => content,
         _ => {
-            problems.push(PathProblem::new(file_path, "the file cannot be read"));
+            problems.push(Problem::new(file_path, "the file cannot be read"));
             return None;
         }
     };
     let content = content.strip_suffix('\n').unwrap_or(&content);
     if content.is_empty() {
-        problems.push(PathProblem::new(file_path, "the file is empty"));
+        problems.push(Problem::new(file_path, "the file is empty"));
         return None;
     }
     Some(Secret::new(content.to_owned()))
 }
 
-fn username(value: &Option<String>, problems: &mut Vec<PathProblem>) -> Option<Secret> {
+fn username(value: &Option<String>, problems: &mut Vec<Problem>) -> Option<Secret> {
     let Some(value) = value.as_deref().filter(|v| !v.is_empty()) else {
-        problems.push(PathProblem::new("ava_username", "is required"));
+        problems.push(Problem::new("ava_username", "is required"));
         return None;
     };
     let digits: String = value
@@ -496,7 +491,7 @@ fn username(value: &Option<String>, problems: &mut Vec<PathProblem>) -> Option<S
     if digits.len() == USERNAME_DIGITS && digits.chars().all(|c| c.is_ascii_digit()) {
         return Some(Secret::new(digits));
     }
-    problems.push(PathProblem::new(
+    problems.push(Problem::new(
         "ava_username",
         format!("must have {USERNAME_DIGITS} digits once dots, dashes and spaces are dropped"),
     ));
@@ -517,12 +512,12 @@ fn parse_duration(text: &str) -> Option<Duration> {
 fn duration_at(
     path: &str,
     value: &Option<String>,
-    problems: &mut Vec<PathProblem>,
+    problems: &mut Vec<Problem>,
 ) -> Option<Duration> {
     let text = required(path, value.as_deref(), problems)?;
     let parsed = parse_duration(text);
     if parsed.is_none() {
-        problems.push(PathProblem::new(
+        problems.push(Problem::new(
             path,
             "must be 0 or a whole number followed by s, m or h",
         ));
@@ -534,31 +529,28 @@ fn duration_at_least(
     path: &str,
     value: &Option<String>,
     minimum: Duration,
-    problems: &mut Vec<PathProblem>,
+    problems: &mut Vec<Problem>,
 ) -> Option<Duration> {
     let parsed = duration_at(path, value, problems)?;
     if parsed >= minimum {
         return Some(parsed);
     }
-    problems.push(PathProblem::new(
+    problems.push(Problem::new(
         path,
         format!("must be at least {}m", minimum.as_secs() / 60),
     ));
     None
 }
 
-fn overdue_repeat(
-    value: &Option<String>,
-    problems: &mut Vec<PathProblem>,
-) -> Option<Option<Duration>> {
+fn overdue_repeat(value: &Option<String>, problems: &mut Vec<Problem>) -> Option<Option<Duration>> {
     let parsed = duration_at("payment_overdue_repeat", value, problems)?;
     Some(Some(parsed).filter(|d| !d.is_zero()))
 }
 
-fn reminder_days(path: &str, days: &[i64], problems: &mut Vec<PathProblem>) -> Option<Vec<u32>> {
+fn reminder_days(path: &str, days: &[i64], problems: &mut Vec<Problem>) -> Option<Vec<u32>> {
     let valid = days.iter().all(|d| (0..=MAXIMUM_REMINDER_DAY).contains(d));
     if !valid {
-        problems.push(PathProblem::new(
+        problems.push(Problem::new(
             path,
             format!("each day must be from 0 to {MAXIMUM_REMINDER_DAY}"),
         ));
@@ -570,10 +562,7 @@ fn reminder_days(path: &str, days: &[i64], problems: &mut Vec<PathProblem>) -> O
     Some(days)
 }
 
-fn billing_day_net(
-    value: &Option<String>,
-    problems: &mut Vec<PathProblem>,
-) -> Option<BillingDayNet> {
+fn billing_day_net(value: &Option<String>, problems: &mut Vec<Problem>) -> Option<BillingDayNet> {
     let text = required("billing_day_net", value.as_deref(), problems)?;
     let parsed = match text {
         "auto" => Some(BillingDayNet::Auto),
@@ -585,7 +574,7 @@ fn billing_day_net(
             .map(BillingDayNet::Fixed),
     };
     if parsed.is_none() {
-        problems.push(PathProblem::new(
+        problems.push(Problem::new(
             "billing_day_net",
             "must be auto, off or a day from 1 to 28",
         ));
@@ -593,20 +582,20 @@ fn billing_day_net(
     parsed
 }
 
-fn reminder_hour(value: Option<i64>, problems: &mut Vec<PathProblem>) -> Option<u32> {
+fn reminder_hour(value: Option<i64>, problems: &mut Vec<Problem>) -> Option<u32> {
     let hour = required("reminder_hour", value, problems)?;
     let parsed = u32::try_from(hour).ok().filter(|h| *h <= 23);
     if parsed.is_none() {
-        problems.push(PathProblem::new("reminder_hour", "must be from 0 to 23"));
+        problems.push(Problem::new("reminder_hour", "must be from 0 to 23"));
     }
     parsed
 }
 
-fn timezone(value: &Option<String>, problems: &mut Vec<PathProblem>) -> Option<chrono_tz::Tz> {
+fn timezone(value: &Option<String>, problems: &mut Vec<Problem>) -> Option<chrono_tz::Tz> {
     let name = required("ava_timezone", value.as_deref(), problems)?;
     let parsed = chrono_tz::Tz::from_str(name).ok();
     if parsed.is_none() {
-        problems.push(PathProblem::new(
+        problems.push(Problem::new(
             "ava_timezone",
             "must be an IANA time zone name",
         ));
@@ -627,7 +616,7 @@ mod tests {
         ("COURSES", "A"),
     ];
 
-    fn document(pairs: &[(&str, &str)]) -> Result<Value, Vec<PathProblem>> {
+    fn document(pairs: &[(&str, &str)]) -> Result<Value, Vec<Problem>> {
         document_from_env(&|name| {
             pairs
                 .iter()
@@ -650,7 +639,7 @@ mod tests {
         pairs
     }
 
-    fn load(pairs: &[(String, String)]) -> Result<Config, Vec<PathProblem>> {
+    fn load(pairs: &[(String, String)]) -> Result<Config, Vec<Problem>> {
         let borrowed: Vec<(&str, &str)> = pairs
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -660,12 +649,27 @@ mod tests {
             .map_err(|err| err.problems)
     }
 
-    fn problems_of(pairs: &[(String, String)]) -> Vec<PathProblem> {
+    fn problems_of(pairs: &[(String, String)]) -> Vec<Problem> {
         load(pairs).err().unwrap_or_default()
     }
 
-    fn paths(problems: &[PathProblem]) -> Vec<&str> {
+    fn paths(problems: &[Problem]) -> Vec<&str> {
         problems.iter().map(|p| p.path.as_str()).collect()
+    }
+
+    #[test]
+    fn a_general_problem_is_shown_without_a_path() {
+        let error = ConfigError {
+            problems: vec![
+                Problem::new("", "the configuration document is not a JSON object"),
+                Problem::new("courses", "at least one course is required"),
+            ],
+        };
+
+        assert_eq!(
+            error.to_string(),
+            "the configuration document is not a JSON object; courses: at least one course is required"
+        );
     }
 
     #[test]
@@ -739,7 +743,7 @@ mod tests {
         let problem = document(&[("PAYMENT_REMINDER_DAYS", "x")]).expect_err("a problem");
         assert_eq!(
             problem,
-            vec![PathProblem::new(
+            vec![Problem::new(
                 "payment_reminder_days",
                 "PAYMENT_REMINDER_DAYS is not integer (\"x\")"
             )]
@@ -791,11 +795,11 @@ mod tests {
         assert_eq!(
             problems,
             vec![
-                PathProblem::new(
+                Problem::new(
                     "calendar_categories",
                     "each item must be one of FINANCIAL, SECRETARIAT, UNIQUE_EVENTS"
                 ),
-                PathProblem::new(
+                Problem::new(
                     "log_level",
                     "must be one of trace, debug, info, warn, error"
                 ),
