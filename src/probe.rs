@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashSet};
+use std::ffi::OsString;
 use std::io::Write;
 use std::process::ExitCode;
 
@@ -326,23 +327,20 @@ fn operations(calls: Vec<Call>) -> Map<String, Value> {
         .collect()
 }
 
-fn environment_lookup() -> impl Fn(&str) -> Option<String> {
+fn environment_lookup() -> impl Fn(&str) -> Option<OsString> {
     let under_hub = std::env::vars_os()
         .any(|(name, _)| name.as_encoded_bytes().starts_with(ENV_PREFIX.as_bytes()));
     let prefix = match under_hub {
         true => ENV_PREFIX,
         false => "",
     };
-    move |name| {
-        std::env::var(format!("{prefix}{name}"))
-            .ok()
-            .filter(|value| !value.is_empty())
-    }
+    move |name| std::env::var_os(format!("{prefix}{name}")).filter(|value| !value.is_empty())
 }
 
 fn load_config() -> Result<Config, String> {
-    let document = config::document_from_env(&environment_lookup()).map_err(|problems| {
-        let lines: Vec<String> = problems
+    let document = config::document_from_env(environment_lookup()).map_err(|err| {
+        let lines: Vec<String> = err
+            .problems
             .iter()
             .map(|problem| format!("{}: {}", problem.path, problem.message))
             .collect();

@@ -1,6 +1,7 @@
 pub mod support;
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::sync::Arc;
 
 use anhanguera_monitor::ava::AvaError;
@@ -39,7 +40,7 @@ fn options() -> MonitorOptions {
         ("AVA_PASSWORD", "test-password"),
         ("COURSES", "Direito"),
     ]);
-    let document = document_from_env(&|name| environment.get(name).map(|v| (*v).to_owned()))
+    let document = document_from_env(|name| environment.get(name).map(|v| OsString::from(*v)))
         .expect("a settings document");
     let config = Config::from_document(&document, &|_| Err(std::io::Error::other("no files")))
         .expect("a valid configuration");

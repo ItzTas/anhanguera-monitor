@@ -1,13 +1,15 @@
+use std::ffi::OsString;
 use std::fmt;
 use std::io;
 use std::str::FromStr;
 use std::time::Duration;
 
-use monitor_hub_sdk::settings::Problem;
+use monitor_hub_sdk::config::{self, LoadError};
+use monitor_hub_sdk::settings::{self, Problem};
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
-use crate::secret::{REDACTED, Secret};
+use crate::secret::Secret;
 
 pub const SETTINGS_JSON: &str = include_str!("../settings.json");
 
@@ -36,6 +38,14 @@ impl fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+impl From<LoadError> for ConfigError {
+    fn from(err: LoadError) -> ConfigError {
+        ConfigError {
+            problems: err.problems(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BillingDayNet {
@@ -106,8 +116,7 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Config, ConfigError> {
-        let document = document_from_env(&|name| std::env::var(name).ok())
-            .map_err(|problems| ConfigError { problems })?;
+        let document = document_from_env(|name| std::env::var_os(name))?;
         Config::from_document(&document, &|path| std::fs::read_to_string(path))
     }
 
@@ -120,14 +129,10 @@ impl Config {
 }
 
 pub fn validate_settings() -> Vec<Problem> {
-    let (document, mut problems) = partial_document_from_env(&|name| std::env::var(name).ok());
-    let known: Vec<String> = problems.iter().map(|p| p.path.clone()).collect();
-    problems.extend(
-        validate(&document)
-            .into_iter()
-            .filter(|p| !known.contains(&p.path)),
-    );
-    problems
+    match document_from_env(|name| std::env::var_os(name)) {
+        Ok(document) => validate(&document),
+        Err(err) => err.problems,
+    }
 }
 
 fn validate(document: &Value) -> Vec<Problem> {
@@ -136,50 +141,11 @@ fn validate(document: &Value) -> Vec<Problem> {
     build(document, &placeholder).err().unwrap_or_default()
 }
 
-pub fn document_from_env(lookup: &dyn Fn(&str) -> Option<String>) -> Result<Value, Vec<Problem>> {
-    let (document, problems) = partial_document_from_env(lookup);
-    if problems.is_empty() {
-        return Ok(document);
-    }
-    Err(problems)
-}
-
-fn partial_document_from_env(lookup: &dyn Fn(&str) -> Option<String>) -> (Value, Vec<Problem>) {
-    let mut document = Map::new();
-    let mut problems = Vec::new();
-    for field in declared_fields() {
-        let name = text_of(&field, "name");
-        let env = text_of(&field, "env");
-        let value = lookup(&env).filter(|v| !v.is_empty());
-        let Some(text) = value else {
-            if let Some(default) = field.get("default") {
-                document.insert(name, default.clone());
-            }
-            continue;
-        };
-        match convert(&field, &text) {
-            Ok(converted) => {
-                document.insert(name, converted);
-            }
-            Err(bad) => {
-                let shown = if field.get("secret") == Some(&Value::Bool(true)) {
-                    REDACTED.to_owned()
-                } else {
-                    bad.text
-                };
-                problems.push(Problem::new(
-                    &name,
-                    format!("{env} is not {} (\"{shown}\")", bad.kind),
-                ));
-            }
-        }
-    }
-    (Value::Object(document), problems)
-}
-
-struct BadText {
-    kind: String,
-    text: String,
+pub fn document_from_env(lookup: impl Fn(&str) -> Option<OsString>) -> Result<Value, ConfigError> {
+    let settings = settings::parse(SETTINGS_JSON.as_bytes())
+        .map_err(|err| ConfigError::from(LoadError::from(err)))?;
+    let document = config::from_lookup(&settings, lookup)?;
+    Ok(Value::Object(document))
 }
 
 fn declared_fields() -> Vec<Value> {
@@ -197,35 +163,6 @@ fn text_of(field: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned()
-}
-
-fn convert(field: &Value, text: &str) -> Result<Value, BadText> {
-    let kind = text_of(field, "type");
-    if kind != "list" {
-        return convert_one(&kind, text);
-    }
-    let item_kind = field
-        .get("items")
-        .map(|items| text_of(items, "type"))
-        .unwrap_or_default();
-    text.split(',')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(|item| convert_one(&item_kind, item))
-        .collect::<Result<Vec<_>, _>>()
-        .map(Value::Array)
-}
-
-fn convert_one(kind: &str, text: &str) -> Result<Value, BadText> {
-    let converted = match kind {
-        "integer" => text.parse::<i64>().ok().map(Value::from),
-        "boolean" => bool::from_str(text).ok().map(Value::from),
-        _ => Some(Value::from(text)),
-    };
-    converted.ok_or_else(|| BadText {
-        kind: kind.to_owned(),
-        text: text.to_owned(),
-    })
 }
 
 fn build(
@@ -606,6 +543,10 @@ fn timezone(value: &Option<String>, problems: &mut Vec<Problem>) -> Option<chron
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::os::unix::ffi::OsStringExt;
+
+    use monitor_hub_sdk::settings::{self, Field};
+    use serde_json::Map;
 
     use super::*;
 
@@ -617,12 +558,26 @@ mod tests {
     ];
 
     fn document(pairs: &[(&str, &str)]) -> Result<Value, Vec<Problem>> {
-        document_from_env(&|name| {
+        document_from_env(|name| {
             pairs
                 .iter()
                 .find(|(key, _)| *key == name)
-                .map(|(_, value)| (*value).to_owned())
+                .map(|(_, value)| OsString::from(value))
         })
+        .map_err(|err| err.problems)
+    }
+
+    fn document_with_bytes(name: &str, value: &[u8]) -> Result<Value, Vec<Problem>> {
+        let raw = OsString::from_vec(value.to_vec());
+        document_from_env(|wanted| {
+            if wanted == name {
+                return Some(raw.clone());
+            }
+            BASE.iter()
+                .find(|(key, _)| *key == wanted)
+                .map(|(_, value)| OsString::from(value))
+        })
+        .map_err(|err| err.problems)
     }
 
     fn with(extra: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -744,8 +699,8 @@ mod tests {
         assert_eq!(
             problem,
             vec![Problem::new(
-                "payment_reminder_days",
-                "PAYMENT_REMINDER_DAYS is not integer (\"x\")"
+                "payment_reminder_days[0]",
+                "PAYMENT_REMINDER_DAYS is not an integer (\"x\")"
             )]
         );
     }
@@ -928,14 +883,39 @@ mod tests {
     }
 
     #[test]
-    fn a_conversion_problem_does_not_hide_the_other_problems() {
-        let (document, mut problems) =
-            partial_document_from_env(&|n| (n == "REMINDER_HOUR").then(|| "x".to_owned()));
-        problems.extend(validate(&document));
+    fn a_conversion_problem_stops_the_document() {
+        let problems = document(&[("REMINDER_HOUR", "x")]).expect_err("a problem");
 
-        let found = paths(&problems);
-        assert!(found.contains(&"reminder_hour"));
-        assert!(found.contains(&"courses"));
+        assert_eq!(
+            problems,
+            vec![Problem::new(
+                "reminder_hour",
+                "REMINDER_HOUR is not an integer (\"x\")"
+            )]
+        );
+    }
+
+    #[test]
+    fn text_that_is_not_utf8_follows_the_sdk() {
+        let secrets = [
+            ("AVA_PASSWORD", "ava_password"),
+            ("DATABASE_URL", "database_url"),
+            ("DATABASE_URL_FILE", "database_url_file"),
+            ("AVA_USERNAME", "ava_username"),
+            ("AVA_PASSWORD_FILE", "ava_password_file"),
+        ];
+        for (name, path) in secrets {
+            let problems = document_with_bytes(name, b"a\xffb").expect_err("a problem");
+            assert_eq!(
+                problems,
+                vec![Problem::new(path, format!("{name} is not valid UTF-8"))]
+            );
+        }
+
+        let document = document_with_bytes("COURSES", b"Dire\xffito").expect("a document");
+        let config =
+            Config::from_document(&document, &|_| Ok(String::new())).expect("valid configuration");
+        assert_eq!(config.courses, vec!["Dire\u{fffd}ito"]);
     }
 
     #[test]
@@ -950,28 +930,55 @@ mod tests {
 
     #[test]
     fn the_declaration_is_version_2_and_well_formed() {
-        let declaration: Value = serde_json::from_str(SETTINGS_JSON).expect("valid JSON");
-        assert_eq!(declaration["settings_version"], 2);
+        let declaration = settings::parse(SETTINGS_JSON.as_bytes()).expect("a valid declaration");
 
-        let valid = |text: &str, first: fn(char) -> bool| {
-            text.chars().next().is_some_and(first)
-                && text
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || c == '_' || first(c))
-        };
-        let mut names = BTreeSet::new();
-        for field in declared_fields() {
-            let name = text_of(&field, "name");
-            let env = text_of(&field, "env");
-            assert!(valid(&name, |c| c.is_ascii_lowercase()), "{name}");
-            assert!(valid(&env, |c| c.is_ascii_uppercase()), "{env}");
-            assert!(names.insert(name.clone()), "duplicate {name}");
-            if field.get("editable") == Some(&Value::Bool(false)) {
-                assert!(!text_of(&field, "reason").is_empty(), "{name}");
-            }
-            if field.get("secret") == Some(&Value::Bool(true)) {
-                assert!(field.get("default").is_none(), "{name}");
-            }
+        assert_eq!(declaration.settings_version, 2);
+        for field in &declaration.fields {
+            assert_eq!(
+                field.env,
+                Some(field.name.to_ascii_uppercase()),
+                "{}",
+                field.name
+            );
         }
+    }
+
+    #[test]
+    fn the_declaration_keeps_secrets_and_files_out_of_the_page() {
+        let declaration = settings::parse(SETTINGS_JSON.as_bytes()).expect("a valid declaration");
+        let names = |keep: fn(&Field) -> bool| -> BTreeSet<&str> {
+            declaration
+                .fields
+                .iter()
+                .filter(|field| keep(field))
+                .map(|field| field.name.as_str())
+                .collect()
+        };
+
+        assert_eq!(
+            names(|field| field.secret),
+            BTreeSet::from([
+                "ava_password",
+                "ava_password_file",
+                "ava_username",
+                "database_url",
+                "database_url_file",
+            ])
+        );
+        assert_eq!(
+            names(|field| !field.is_editable()),
+            BTreeSet::from(["ava_graphql_url", "ava_password_file", "database_url_file"])
+        );
+        assert!(
+            declaration
+                .fields
+                .iter()
+                .filter(|field| !field.is_editable())
+                .all(|field| field.reason.as_deref().is_some_and(|r| !r.is_empty()))
+        );
+        assert_eq!(
+            names(|field| field.required),
+            BTreeSet::from(["ava_username", "courses"])
+        );
     }
 }

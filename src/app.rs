@@ -143,6 +143,7 @@ fn lock_lost(lock: &WriterLock) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::ffi::OsString;
     use std::time::{Duration, Instant};
 
     use tokio::net::TcpListener;
@@ -159,7 +160,7 @@ mod tests {
             ("AVA_PASSWORD", "test-password"),
             ("COURSES", "Direito"),
         ]);
-        let document = document_from_env(&|name| environment.get(name).map(|v| (*v).to_owned()))
+        let document = document_from_env(|name| environment.get(name).map(|v| OsString::from(*v)))
             .expect("a settings document");
         Config::from_document(&document, &|_| Err(std::io::Error::other("no files")))
             .expect("a valid configuration")
