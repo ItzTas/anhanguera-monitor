@@ -9,6 +9,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use monitor_hub_sdk::{MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE};
+use monitor_hub_sdk_testkit::settings::{DocumentCommand, command_with_document};
+use serde_json::{Value, json};
 
 const HANDSHAKE_LIMIT: Duration = Duration::from_secs(30);
 const PIPE_LIMIT: Duration = Duration::from_secs(5);
@@ -23,6 +25,8 @@ pub struct RunningMonitor {
     pub socket: PathBuf,
     stdout: Receiver<String>,
     stderr: Receiver<String>,
+    // The document's file must outlive the shell that opens it on descriptor 3.
+    _document: Option<DocumentCommand>,
 }
 
 pub struct Exited {
@@ -58,28 +62,54 @@ impl Drop for SocketDir {
     }
 }
 
+pub fn process_env(sockets: &SocketDir) -> Vec<(String, String)> {
+    let path = env::var("PATH").unwrap_or_default();
+    vec![
+        ("TMPDIR".to_owned(), sockets.path().to_owned()),
+        ("PATH".to_owned(), path),
+    ]
+}
+
 pub fn monitor_env(
     database_url: &str,
     graphql_url: &str,
     sockets: &SocketDir,
 ) -> Vec<(String, String)> {
-    let path = env::var("PATH").unwrap_or_default();
-    [
+    let mut env: Vec<(String, String)> = [
         ("DATABASE_URL", database_url),
         ("AVA_USERNAME", "12345678909"),
         ("AVA_PASSWORD", "test-password"),
         ("COURSES", "Analise e desenvolvimento de sistemas"),
         ("AVA_GRAPHQL_URL", graphql_url),
-        ("TMPDIR", sockets.path()),
-        ("PATH", &path),
     ]
     .into_iter()
     .map(|(name, value)| (name.to_owned(), value.to_owned()))
-    .collect()
+    .collect();
+    env.extend(process_env(sockets));
+    env
+}
+
+pub fn monitor_document(database_url: &str, graphql_url: &str) -> Value {
+    json!({
+        "database_url": database_url,
+        "ava_username": "12345678909",
+        "ava_password": "test-password",
+        "courses": ["Analise e desenvolvimento de sistemas"],
+        "ava_graphql_url": graphql_url,
+    })
 }
 
 pub fn spawn_monitor(env: &[(String, String)]) -> RunningMonitor {
-    let mut child = start(env);
+    handshake(start(env), None)
+}
+
+pub fn spawn_monitor_with_document(env: &[(String, String)], document: &Value) -> RunningMonitor {
+    let mut document = document_command(env, document);
+    let child = spawn_piped(&mut document.command);
+    handshake(child, Some(document))
+}
+
+fn handshake(mut child: Child, document: Option<DocumentCommand>) -> RunningMonitor {
     let stdout = read_first_line(child.stdout.take().expect("piped stdout"));
     let stderr = read_all(child.stderr.take().expect("piped stderr"));
     let mut spawned = RunningMonitor {
@@ -87,6 +117,7 @@ pub fn spawn_monitor(env: &[(String, String)]) -> RunningMonitor {
         socket: PathBuf::new(),
         stdout,
         stderr,
+        _document: document,
     };
     let Ok(line) = spawned.stdout.recv_timeout(HANDSHAKE_LIMIT) else {
         spawned.fail("the monitor printed no handshake line within 30 seconds");
@@ -102,6 +133,15 @@ pub fn spawn_monitor(env: &[(String, String)]) -> RunningMonitor {
 
 pub fn run_to_exit(env: &[(String, String)], limit: Duration) -> Exited {
     run_limited(monitor_command(env), limit)
+}
+
+pub fn run_to_exit_with_document(
+    env: &[(String, String)],
+    document: &Value,
+    limit: Duration,
+) -> Exited {
+    let document = document_command(env, document);
+    run_limited(document.command, limit)
 }
 
 // Waits for the end of stderr, which comes when the process exits.
@@ -137,6 +177,21 @@ fn monitor_command(env: &[(String, String)]) -> Command {
         .env(MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE)
         .envs(env.iter().map(|(name, value)| (name, value)));
     command
+}
+
+fn document_command(env: &[(String, String)], document: &Value) -> DocumentCommand {
+    let bytes = serde_json::to_vec(document).expect("the document is JSON");
+    let mut document = command_with_document(
+        env!("CARGO_BIN_EXE_anhanguera-monitor"),
+        &["monitor"],
+        &bytes,
+    )
+    .expect("write the document");
+    document
+        .command
+        .env(MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE)
+        .envs(env.iter().map(|(name, value)| (name, value)));
+    document
 }
 
 fn spawn_piped(command: &mut Command) -> Child {

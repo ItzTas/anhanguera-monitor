@@ -4,11 +4,14 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 use tokio_postgres::Client;
 
 use support::fake_ava::FakeAva;
-use support::process::{SocketDir, monitor_env, require_sh, run_to_exit, spawn_monitor};
+use support::process::{
+    SocketDir, monitor_env, process_env, require_sh, run_to_exit, run_to_exit_with_document,
+    spawn_monitor,
+};
 use support::schema::table_names;
 use support::{admin, database, end_the_writer_locks_connection};
 
@@ -163,4 +166,43 @@ async fn a_url_without_a_password_stops_the_start_before_pgpass_is_read() {
     let tables = table_names(&admin(&db.url).await).await;
     assert!(tables.is_empty(), "{tables:?}");
     assert!(portal.requests().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_configuration_error_in_the_document_stops_the_start_before_the_portal() {
+    if !require_sh() {
+        return;
+    }
+    let ava = FakeAva::start().await;
+    let sockets = SocketDir::create();
+    let document = json!({
+        "database_url": "postgres://anhanguera:s3cr3t-marker@127.0.0.1:9/anhanguera",
+        "ava_username": "1234",
+        "ava_password": "s3cr3t-marker",
+        "courses": [],
+        "reminder_hour": 24,
+        "ava_graphql_url": ava.url(),
+    });
+
+    let exited = run_to_exit_with_document(&process_env(&sockets), &document, EXIT_LIMIT);
+
+    assert!(
+        !exited.stdout.contains("s3cr3t-marker"),
+        "stdout carries the secret marker"
+    );
+    assert!(
+        !exited.stderr.contains("s3cr3t-marker"),
+        "stderr carries the secret marker"
+    );
+    assert_eq!(exited.status.code(), Some(1));
+    assert_eq!(exited.stdout, "");
+    assert_eq!(
+        exited.stderr,
+        concat!(
+            "ava_username: must have 11 digits once dots, dashes and spaces are dropped; ",
+            "courses: at least one course is required; ",
+            "reminder_hour: must be from 0 to 23\n"
+        )
+    );
+    assert!(ava.requests().is_empty());
 }

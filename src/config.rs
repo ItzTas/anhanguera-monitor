@@ -116,8 +116,10 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Result<Config, ConfigError> {
-        let document = document_from_env(|name| std::env::var_os(name))?;
-        Config::from_document(&document, &|path| std::fs::read_to_string(path))
+        let document = config::load(SETTINGS_JSON)?;
+        Config::from_document(&Value::Object(document), &|path| {
+            std::fs::read_to_string(path)
+        })
     }
 
     pub fn from_document(
@@ -129,9 +131,9 @@ impl Config {
 }
 
 pub fn validate_settings() -> Vec<Problem> {
-    match document_from_env(|name| std::env::var_os(name)) {
-        Ok(document) => validate(&document),
-        Err(err) => err.problems,
+    match config::load(SETTINGS_JSON) {
+        Ok(document) => validate(&Value::Object(document)),
+        Err(err) => err.problems(),
     }
 }
 

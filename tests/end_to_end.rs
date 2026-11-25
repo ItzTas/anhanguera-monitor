@@ -18,7 +18,10 @@ use tonic::{Request, Streaming};
 use tonic_prost::ProstCodec;
 
 use support::fake_ava::FakeAva;
-use support::process::{SocketDir, monitor_env, require_sh, spawn_monitor};
+use support::process::{
+    SocketDir, monitor_document, monitor_env, process_env, require_sh, spawn_monitor,
+    spawn_monitor_with_document,
+};
 use support::schema::{goose_era_database, seed_rows};
 
 const OPEN_INVOICES: &str = include_str!("../testdata/ava/Invoices.open.json");
@@ -203,4 +206,43 @@ async fn a_database_left_by_0_1_keeps_its_events_device_and_positions() {
         .filter(|request| request.operation == "LoginStudent")
         .count();
     assert_eq!(logins, 1, "{logins} logins");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_document_on_descriptor_3_starts_the_monitor_with_one_portal_login() {
+    if !require_sh() {
+        return;
+    }
+    let Some(db) = database().await else {
+        return;
+    };
+    let ava = FakeAva::quiet().await;
+    let sockets = SocketDir::create();
+    let mut env = process_env(&sockets);
+    env.extend(
+        [
+            (
+                "DATABASE_URL",
+                "postgres://anhanguera:decoy@127.0.0.1:9/anhanguera",
+            ),
+            ("AVA_PASSWORD", "wrong-password"),
+            ("AVA_GRAPHQL_URL", "http://127.0.0.1:9/"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned())),
+    );
+    let mut spawned = spawn_monitor_with_document(&env, &monitor_document(&db.url, &ava.url()));
+
+    first_cycle_finished(&spawned.socket, Instant::now() + DELIVERY_LIMIT).await;
+    let exited = spawned.stop();
+
+    assert_eq!(exited.status.code(), Some(0), "{}", exited.stderr);
+    let requests = ava.requests();
+    let count = |operation: &str| {
+        requests
+            .iter()
+            .filter(|request| request.operation == operation)
+            .count()
+    };
+    assert_eq!(count("LoginStudent"), 1);
+    assert!(count("StudentId") >= 1);
 }
