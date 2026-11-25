@@ -344,3 +344,52 @@ fn validate_settings_never_prints_a_secret() {
     );
     assert_eq!(exited.status.code(), Some(1));
 }
+
+#[test]
+fn a_database_address_the_start_refuses_is_refused() {
+    let no_password = concat!(
+        r#"{"problems":[{"path":"database_url","#,
+        r#""message":"DATABASE_URL has no password: add the role's password to the URL"}]}"#,
+        "\n"
+    );
+
+    let exited = run(&base_with_bytes(
+        "DATABASE_URL",
+        b"postgres://anhanguera@db/anhanguera",
+    ));
+
+    assert_eq!(exited.stdout, no_password);
+    assert_eq!(exited.status.code(), Some(1));
+    assert_eq!(exited.stderr, "");
+
+    let exited = run(&base_with_bytes(
+        "DATABASE_URL",
+        b"postgres://anhanguera:s3cr3t-marker@db/anhanguera?target_session_attrs=read-write",
+    ));
+
+    assert_without_the_marker(&exited);
+    assert_eq!(
+        exited.stdout,
+        concat!(
+            r#"{"problems":[{"path":"database_url","#,
+            r#""message":"DATABASE_URL's target_session_attrs needs a session check the monitor does not run"}]}"#,
+            "\n"
+        )
+    );
+    assert_eq!(exited.status.code(), Some(1));
+
+    if !require_sh() {
+        return;
+    }
+    let document = json!({
+        "database_url": "postgres://anhanguera@db/anhanguera",
+        "ava_username": "12345678909",
+        "ava_password": "x",
+        "courses": ["A"],
+    });
+
+    let exited = validate_document(&document, &[]);
+
+    assert_eq!(exited.stdout, no_password);
+    assert_eq!(exited.status.code(), Some(1));
+}

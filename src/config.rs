@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::secret::Secret;
+use crate::store::check_database_url;
 
 pub const SETTINGS_JSON: &str = include_str!("../settings.json");
 
@@ -131,10 +132,29 @@ impl Config {
 }
 
 pub fn validate_settings() -> Vec<Problem> {
-    match config::load(SETTINGS_JSON) {
-        Ok(document) => validate(&Value::Object(document)),
-        Err(err) => err.problems(),
+    let document = match config::load(SETTINGS_JSON) {
+        Ok(document) => Value::Object(document),
+        Err(err) => return err.problems(),
+    };
+    let problems = validate(&document);
+    if !problems.is_empty() {
+        return problems;
     }
+    database_url_problems(&document)
+}
+
+fn database_url_problems(document: &Value) -> Vec<Problem> {
+    let Some(database_url) = document
+        .get("database_url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty())
+    else {
+        return Vec::new();
+    };
+    check_database_url(database_url)
+        .err()
+        .map(|err| vec![Problem::new("database_url", err.to_string())])
+        .unwrap_or_default()
 }
 
 fn validate(document: &Value) -> Vec<Problem> {

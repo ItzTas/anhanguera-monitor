@@ -443,6 +443,10 @@ async fn device_id(connection: &impl ConnectionTrait) -> Result<Option<String>, 
         .await?)
 }
 
+pub(crate) fn check_database_url(database_url: &str) -> Result<(), StoreError> {
+    database_options(database_url).map(|_| ())
+}
+
 pub(crate) fn chain_text(error: &(dyn Error + 'static)) -> String {
     let mut text = error.to_string();
     let mut cause = error.source();
