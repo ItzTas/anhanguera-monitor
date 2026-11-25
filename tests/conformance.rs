@@ -32,6 +32,7 @@ async fn the_monitor_conforms() {
     conformance.command.push("monitor".to_owned());
     conformance.env = monitor_env(&db.url, &ava.url(), &sockets);
     conformance.min_events = 1;
+    conformance.monitor_dir = Some(env!("CARGO_MANIFEST_DIR").into());
     conformance.ready_timeout = Duration::from_secs(20);
 
     let outcome = tokio::task::spawn_blocking(move || run(&conformance))

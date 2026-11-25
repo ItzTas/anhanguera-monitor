@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use monitor_hub_sdk::settings::{VALIDATE_SETTINGS_ARG, VALIDATE_SETTINGS_LIMIT};
 use monitor_hub_sdk::{MAGIC_COOKIE_KEY, MAGIC_COOKIE_VALUE};
-use monitor_hub_sdk_testkit::settings::command_with_document;
+use monitor_hub_sdk_testkit::settings::{assert_no_drift, check, command_with_document};
 use serde_json::{Value, json};
 use support::process::{Exited, require_sh, run_limited};
 
@@ -392,4 +392,40 @@ fn a_database_address_the_start_refuses_is_refused() {
 
     assert_eq!(exited.stdout, no_password);
     assert_eq!(exited.status.code(), Some(1));
+}
+
+#[test]
+fn settings_pass_the_hub_checks() {
+    let problems = check(
+        env!("CARGO_MANIFEST_DIR"),
+        env!("CARGO_BIN_EXE_anhanguera-monitor"),
+    );
+
+    assert_eq!(problems, Vec::<String>::new());
+}
+
+#[test]
+fn the_configuration_structure_matches_the_declaration() {
+    assert_no_drift::<anhanguera_monitor::config::RawConfig>(
+        anhanguera_monitor::config::SETTINGS_JSON,
+    );
+}
+
+#[test]
+fn an_empty_database_url_beside_its_file_is_not_checked_as_an_address() {
+    if !require_sh() {
+        return;
+    }
+    let document = json!({
+        "database_url": "",
+        "database_url_file": "/run/db",
+        "ava_username": "12345678909",
+        "ava_password": "x",
+        "courses": ["A"],
+    });
+
+    let exited = validate_document(&document, &[]);
+
+    assert_eq!(exited.stdout, "{\"problems\":[]}\n");
+    assert_eq!(exited.status.code(), Some(0));
 }
