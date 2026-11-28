@@ -64,30 +64,33 @@ async fn a_failed_migration_keeps_none_of_its_tables() {
         return;
     };
     let client = admin(&db.url).await;
+    // sea-orm-migration's own table, whose record insert runs after the tables are created, in
+    // the same transaction.
     client
         .batch_execute(
-            "CREATE FUNCTION refuse_problems() RETURNS event_trigger LANGUAGE plpgsql AS $$
+            "CREATE TABLE seaql_migrations (
+                version varchar PRIMARY KEY,
+                applied_at bigint NOT NULL
+            );
+            CREATE FUNCTION refuse_record() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
-                IF EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands()
-                           WHERE object_identity = current_schema() || '.problems') THEN
-                    RAISE EXCEPTION 'CREATE TABLE problems refused by the test';
-                END IF;
+                RAISE EXCEPTION 'migration record refused by the test';
             END
             $$;
-            CREATE EVENT TRIGGER refuse_problems ON ddl_command_end
-                WHEN TAG IN ('CREATE TABLE') EXECUTE FUNCTION refuse_problems();",
+            CREATE TRIGGER refuse_record BEFORE INSERT ON seaql_migrations
+                FOR EACH ROW EXECUTE FUNCTION refuse_record();",
         )
         .await
-        .expect("create the event trigger");
+        .expect("refuse the migration record");
 
     let failed = Migrator::up(&orm(&db.url).await, None)
         .await
-        .expect_err("the event trigger refuses the last table");
+        .expect_err("the trigger refuses the record");
 
     assert!(
         failed
             .to_string()
-            .contains("CREATE TABLE problems refused by the test"),
+            .contains("migration record refused by the test"),
         "{failed}"
     );
     assert_eq!(table_names(&client).await, ["seaql_migrations"]);
