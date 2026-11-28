@@ -55,8 +55,6 @@ pub enum StoreError {
     Timeout(&'static str),
     #[error(transparent)]
     Database(DbErr),
-    #[error("{0}")]
-    Migration(String),
     #[error("{LOCK_LOST}: {0}")]
     LockLost(String),
 }

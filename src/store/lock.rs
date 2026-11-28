@@ -63,9 +63,7 @@ impl WriterLock {
         // starts once nothing is pending.
         let pending = Migrator::get_pending_migrations_read_only(&transaction).await?;
         if !pending.is_empty() {
-            Migrator::up(&transaction, None)
-                .await
-                .map_err(migration_error)?;
+            Migrator::up(&transaction, None).await?;
         }
         transaction.commit().await?;
         Ok(pending
@@ -171,13 +169,6 @@ async fn answered<T>(work: impl Future<Output = Result<T, DbErr>>) -> Result<T, 
         }
         format!("the lock's connection failed: {}", chain_text(&error))
     })
-}
-
-fn migration_error(error: DbErr) -> StoreError {
-    let DbErr::Migration(text) = error else {
-        return StoreError::from(error);
-    };
-    StoreError::Migration(text)
 }
 
 #[cfg(test)]
