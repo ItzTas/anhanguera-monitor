@@ -42,7 +42,7 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 │   ├── payments.rs            # plan_payments: invoices, reminders, billing-day net, payment events
 │   ├── coursework.rs          # coursework items, the digest, calendar reminders
 │   ├── migration.rs           # Migrator: the sea-orm-migration modules, in order
-│   ├── migration/             # goose.rs (adopts the goose schema) and one module per migration
+│   ├── migration/             # one module per migration
 │   ├── store.rs               # Store (SeaORM pool), its queries, StoreError
 │   ├── store/                 # connection.rs (URL rules, pool), lock.rs (WriterLock), entity/ (one file per table)
 │   ├── monitor.rs             # Monitor: areas, run_cycle, problems, blind and login streaks
@@ -51,8 +51,6 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 │   ├── probe.rs               # the probe command: response shapes and verdicts
 │   └── logtest.rs             # tests only: captures log events on the calling thread
 ├── queries/                   # the GraphQL documents, embedded with include_str!
-├── sql/
-│   └── schema/                # goose-format files, the input of the first migration
 ├── testdata/ava/              # fictitious portal answers for the fake portal
 ├── tests/
 │   ├── support/               # shared helpers, one file per subject (see Testing)
@@ -93,45 +91,18 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
 - The monitor reaches Postgres through SeaORM on sqlx. The entities are in `src/store/entity/`, one
   per table. The migrations are `sea-orm-migration` modules in `src/migration/`, run in the order
   of `Migrator::migrations`, and `seaql_migrations` records the ones applied.
-- The first migration, `m20261120_000001_goose_schema`, adopts the schema that goose built for
-  0.1.0. It reads `goose_db_version` in the current schema and runs the Up section of each
-  `sql/schema/` file that table has not recorded. A database without the table is new and gets
-  every file. It refuses a gap (`migration version 1 is not applied but the database is already at
-  version 2`) and a table with no rows (`goose_db_version has no rows, not even the version 0 row
-  goose expects`), accepts versions above 2, and never writes a goose row.
-- The second, `m20261120_000002_drop_goose_db_version`, drops `goose_db_version` from that same
-  schema, qualified by the schema and without `CASCADE`. If another object depends on the table,
-  the drop fails, nothing is dropped, and start-up stops with Postgres's error. The device id and
-  every row pass through the two migrations unchanged.
-- **Upgrading from 0.1.0.** The first start of this version creates `seaql_migrations` and drops
-  `goose_db_version`. The monitor's role therefore needs `CREATE` on the current schema and must
-  own `goose_db_version`, which 0.1.0 never needed after its own first start. Without `CREATE` the
-  start fails with `applying the database migrations: Execution Error: error returned from
-  database: permission denied for schema public`, and without ownership with `... must be owner of
-  table goose_db_version`. Either way it changes nothing, but under the hub it becomes a restart
-  loop, and no try gets as far as calling the portal. Before the first start, run these as the
-  monitor's role:
-
-  ```sql
-  SELECT has_schema_privilege(current_user, current_schema(), 'CREATE');
-  SELECT tablename, tableowner FROM pg_tables
-  WHERE schemaname = current_schema() AND tablename = 'goose_db_version';
-  ```
-
-  The first must return `t`, and the second must list the table with the monitor's role as
-  `tableowner`. Later starts need the rights 0.1.0 needed on the tables and on `events_seq_seq`,
-  and `SELECT` on `seaql_migrations`. Without that table's rights the start reads the migrations
-  as pending, tries to create the table and fails with the same `permission denied for schema
-  public`, which points at the wrong right. It happens when another role ran the first start:
-  grant it. Take a `pg_dump` of the database before the first start, because there is no way back.
-- 0.1.0 no longer runs on a database that went through the migrations. Started on one, it exits 1
-  with `applying the database migrations: migration 00001_init.sql failed: db error: ERROR:
-  relation "monitor_state" already exists` and changes no data. It does leave a new
-  `goose_db_version` table with one version-0 row, which this version ignores and never drops,
-  because the drop migration is already recorded. Drop it by hand.
+- `m20261128_000001_init` creates the six tables listed below, with `invoices` keyed by
+  `(course_enrollment_id, id)`.
+- The first start creates the tables and `seaql_migrations`, so the monitor's role needs `CREATE`
+  on the current schema for that start. Once nothing is pending, a start sends no DDL (see below)
+  and needs `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the six tables, `USAGE` and `SELECT` on
+  `events_seq_seq`, and `SELECT` on `seaql_migrations`. A role without rights on
+  `seaql_migrations` cannot see that table, so the start takes the migrations as pending, tries to
+  create it and fails with `permission denied for schema public`, which points at the wrong right.
+  This happens when another role ran the first start: grant the rights.
 - A schema change is a new module in `src/migration/` and a new entry at the end of
-  `Migrator::migrations`. **Never edit a migration that already exists, nor the files in
-  `sql/schema/`**: they are the first migration's input.
+  `Migrator::migrations`. **Never edit a migration that already exists**: a database that has
+  recorded it never runs it again.
 - Start-up runs the migrations on the writer lock's connection, in one transaction that first
   checks that the connection still holds the lock. The monitor reads the pending migrations
   without creating `seaql_migrations`, and sends DDL only when one is pending, so a role with
@@ -140,11 +111,10 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
   leave that transaction, so a statement Postgres refuses inside a transaction block, such as
   `CREATE INDEX CONCURRENTLY`, cannot be a migration: it makes start-up fail.
 - The SQL lives in the store (`src/store.rs` and `src/store/`) and in the migrations
-  (`src/migration/`, which reads `sql/schema/`). Most queries go through the entities. These keep
-  raw SQL, the same text as before SeaORM: `LOCK_STATE`, `INSERT_SENT_KEY`, `PAYMENTS_FAILED`,
-  `LAST_ISSUED_SEQ`, `NEWEST_SEQ`, `PRUNE_EVENTS` and `PRUNE_SENT_KEYS`. Every transaction that
-  inserts an event locks the state row first, so the order of `seq` values is the order of the
-  commits.
+  (`src/migration/`). Most queries go through the entities. These keep raw SQL: `LOCK_STATE`,
+  `INSERT_SENT_KEY`, `PAYMENTS_FAILED`, `LAST_ISSUED_SEQ`, `NEWEST_SEQ`, `PRUNE_EVENTS` and
+  `PRUNE_SENT_KEYS`. Every transaction that inserts an event locks the state row first, so the
+  order of `seq` values is the order of the commits.
 - `Store::record` signals the hub with the new event's `seq` right after the commit that inserted
   it, never before. A failed commit, or a record without a new event, signals nothing.
   `Store::initialize` writes the welcome event without a signal.
@@ -166,9 +136,8 @@ Everything is in English: identifiers, files, SQL, logs and user-facing text.
   is tested before each use. Getting a connection has 10 s. The pool keeps no minimum, idle limit
   or lifetime, so sqlx runs no maintenance task and `Store::new` works outside a runtime. A
   connection the server closed while idle (`idle_session_timeout`, a restart,
-  `pg_terminate_backend`) is replaced at its next use, so the role no longer needs
-  `idle_session_timeout` at 0. The lock's connection is queried every 0.5 s, so it is never idle for
-  longer than that.
+  `pg_terminate_backend`) is replaced at its next use, so any `idle_session_timeout` works. The
+  lock's connection is queried every 0.5 s, so it is never idle for longer than that.
 - The writer lock (`pg_try_advisory_lock`) has a connection of its own, outside the pool, with the
   same keepalives, no statement or lock timeout because the migrations run there, and
   `client_min_messages=warning`. It is never tested before use: a failed test would quietly open a
@@ -203,11 +172,11 @@ The database layer adds these lines to the log. None carries the address or a pa
   modules carry no `#[allow]`. One file per subject: `fake_ava.rs` (fake GraphQL portal serving
   `testdata/ava`), `fake_portal.rs` (a `Portal` for cycle tests), `postgres.rs` (the throwaway
   Postgres), `process.rs` (starts the binary, reads the handshake, sends signals), `proxy.rs` (a
-  TCP proxy that can stop answering) and `schema.rs` (goose-era databases, schema snapshots).
+  TCP proxy that can stop answering) and `schema.rs` (the tables of the current schema).
 - Database tests get a database from `support::migrated_database()`, which migrates through
   `Migrator`, or from `support::database()` when the test migrates by itself. The Postgres comes
-  from `support/postgres.rs` over TCP, and `support/schema.rs` builds goose-era databases and
-  compares schemas. `tests/migration.rs` covers the adoption.
+  from `support/postgres.rs` over TCP, and `support/schema.rs` lists the tables of the current
+  schema. `tests/migration.rs` covers the migrations.
 - A test that needs something outside the crate (Postgres, `sh`, the conformance command) prints a
   `skipping:` notice and returns when it is missing, and panics when `CI` is set and not empty.
 - A test that hands the binary a configuration document uses the testkit's

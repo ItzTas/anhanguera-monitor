@@ -80,9 +80,9 @@ skipping.
   port. `TEST_DATABASE_URL` must be a `postgres://` URL with a password, like `DATABASE_URL`, and
   its role must be able to create databases. The throwaway cluster trusts every login, so its URL
   carries a password that Postgres ignores. `tests/support::migrated_database` adds the migrations.
-- `tests/migration.rs` builds databases the way goose did (versions 1 and 2, above 2, with a gap,
-  with an empty `goose_db_version`) and checks that the first migration adopts them without
-  losing a row, and that the second drops `goose_db_version`.
+- `tests/migration.rs` checks that a new database gets today's tables, that a failed migration
+  keeps none of them and records nothing, that a second run changes nothing, and that the tables
+  go to the first schema on the search path.
 - `sh` with `kill` for the tests that start the binary and signal it.
 - The conformance command for `tests/conformance.rs`: the binary named by `MONITOR_CONFORMANCE`,
   or else `go install` of `monitor-conformance` at the SDK's Go tag `sdk-go/v0.7.0`, cached under
@@ -190,13 +190,6 @@ works too). Put the host, port, user, password and database in the URL.
 - The monitor passes on the query keys sqlx reads: `sslmode`, `options`, `application_name`,
   `host`, `hostaddr`, `port`, `dbname`, `user`, `password`, the certificate keys (`sslrootcert`,
   `sslcert`, `sslkey` and their dashed forms) and `statement-cache-capacity`.
-- It accepts and ignores the libpq keys that 0.1.0 took and sqlx has no equivalent for:
-  `connect_timeout`, `tcp_user_timeout`, `keepalives`, `keepalives_idle`, `keepalives_interval`,
-  `keepalives_retries` and `load_balance_hosts`, plus `channel_binding=disable` or `prefer`,
-  `sslnegotiation=postgres` and `target_session_attrs=any`. Any other value of those last three
-  stops the start with a message that names the key and never its value: `DATABASE_URL's
-  channel_binding needs TLS, and the monitor connects without TLS`, the same for `sslnegotiation`,
-  and `DATABASE_URL's target_session_attrs needs a session check the monitor does not run`.
 - An IPv6 host goes in brackets: `postgres://user:password@[::1]:5432/database`.
 - A refused address stops the start with one `fatal` line, for example `acquiring the database
   writer lock: DATABASE_URL has no password: add the role's password to the URL`. The `probe`
@@ -224,9 +217,9 @@ answer carries a secret.
   10 s, and sqlx retries a refused connection within them. The whole sequence has 45 s, because the
   hub kills a monitor that has not answered in 60 s. Start-up does not call the portal, so nothing
   of it logs in. Against a database that refuses connections the start ends after about 10 s with
-  `acquiring the database writer lock: connecting to the database for the writer lock timed out`
-  (0.1.0 failed at once). The longest stall after the lock's connection drops ends the process
-  after about 30 s. Both stay under the 45 s start-up limit and the 60 s the hub allows.
+  `acquiring the database writer lock: connecting to the database for the writer lock timed out`.
+  The longest stall after the lock's connection drops ends the process after about 30 s. Both stay
+  under the 45 s start-up limit and the 60 s the hub allows.
 - Exit code 0 means a clean stop (SIGTERM or SIGINT), with no `fatal` line. When the monitor exits
   1 because of a failed start-up step or a lost database lock, it writes exactly one JSON `fatal`
   line at `error` level, whose `error` field names the step (for example `acquiring the database
@@ -350,45 +343,18 @@ Settled ones are `PAID`, `CANCELLED`, `REFUNDED`, `WROTE_OFF` and `OVERPAID`.
 - The monitor reaches Postgres through SeaORM on sqlx. The entities are in `src/store/entity/`, one
   per table. The migrations are `sea-orm-migration` modules in `src/migration/`, run in the order
   of `Migrator::migrations`, and `seaql_migrations` records the ones applied.
-- The first migration, `m20261120_000001_goose_schema`, adopts the schema that goose built for
-  0.1.0. It reads `goose_db_version` in the current schema and runs the Up section of each
-  `sql/schema/` file that table has not recorded. A database without the table is new and gets
-  every file. It refuses a gap (`migration version 1 is not applied but the database is already at
-  version 2`) and a table with no rows (`goose_db_version has no rows, not even the version 0 row
-  goose expects`), accepts versions above 2, and never writes a goose row.
-- The second, `m20261120_000002_drop_goose_db_version`, drops `goose_db_version` from that same
-  schema, qualified by the schema and without `CASCADE`. If another object depends on the table,
-  the drop fails, nothing is dropped, and start-up stops with Postgres's error. The device id and
-  every row pass through the two migrations unchanged.
-- **Upgrading from 0.1.0.** The first start of this version creates `seaql_migrations` and drops
-  `goose_db_version`. The monitor's role therefore needs `CREATE` on the current schema and must
-  own `goose_db_version`, which 0.1.0 never needed after its own first start. Without `CREATE` the
-  start fails with `applying the database migrations: Execution Error: error returned from
-  database: permission denied for schema public`, and without ownership with `... must be owner of
-  table goose_db_version`. Either way it changes nothing, but under the hub it becomes a restart
-  loop, and no try gets as far as calling the portal. Before the first start, run these as the
-  monitor's role:
-
-  ```sql
-  SELECT has_schema_privilege(current_user, current_schema(), 'CREATE');
-  SELECT tablename, tableowner FROM pg_tables
-  WHERE schemaname = current_schema() AND tablename = 'goose_db_version';
-  ```
-
-  The first must return `t`, and the second must list the table with the monitor's role as
-  `tableowner`. Later starts need the rights 0.1.0 needed on the tables and on `events_seq_seq`,
-  and `SELECT` on `seaql_migrations`. Without that table's rights the start reads the migrations
-  as pending, tries to create the table and fails with the same `permission denied for schema
-  public`, which points at the wrong right. It happens when another role ran the first start:
-  grant it. Take a `pg_dump` of the database before the first start, because there is no way back.
-- 0.1.0 no longer runs on a database that went through the migrations. Started on one, it exits 1
-  with `applying the database migrations: migration 00001_init.sql failed: db error: ERROR:
-  relation "monitor_state" already exists` and changes no data. It does leave a new
-  `goose_db_version` table with one version-0 row, which this version ignores and never drops,
-  because the drop migration is already recorded. Drop it by hand.
+- `m20261128_000001_init` creates the six tables listed below, with `invoices` keyed by
+  `(course_enrollment_id, id)`.
+- The first start creates the tables and `seaql_migrations`, so the monitor's role needs `CREATE`
+  on the current schema for that start. Once nothing is pending, a start sends no DDL (see below)
+  and needs `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the six tables, `USAGE` and `SELECT` on
+  `events_seq_seq`, and `SELECT` on `seaql_migrations`. A role without rights on
+  `seaql_migrations` cannot see that table, so the start takes the migrations as pending, tries to
+  create it and fails with `permission denied for schema public`, which points at the wrong right.
+  This happens when another role ran the first start: grant the rights.
 - A schema change is a new module in `src/migration/` and a new entry at the end of
-  `Migrator::migrations`. **Never edit a migration that already exists, nor the files in
-  `sql/schema/`**: they are the first migration's input.
+  `Migrator::migrations`. **Never edit a migration that already exists**: a database that has
+  recorded it never runs it again.
 - Start-up runs the migrations on the writer lock's connection, in one transaction that first
   checks that the connection still holds the lock. The monitor reads the pending migrations
   without creating `seaql_migrations`, and sends DDL only when one is pending, so a role with
@@ -397,11 +363,10 @@ Settled ones are `PAID`, `CANCELLED`, `REFUNDED`, `WROTE_OFF` and `OVERPAID`.
   leave that transaction, so a statement Postgres refuses inside a transaction block, such as
   `CREATE INDEX CONCURRENTLY`, cannot be a migration: it makes start-up fail.
 - The SQL lives in the store (`src/store.rs` and `src/store/`) and in the migrations
-  (`src/migration/`, which reads `sql/schema/`). Most queries go through the entities. These keep
-  raw SQL, the same text as before SeaORM: `LOCK_STATE`, `INSERT_SENT_KEY`, `PAYMENTS_FAILED`,
-  `LAST_ISSUED_SEQ`, `NEWEST_SEQ`, `PRUNE_EVENTS` and `PRUNE_SENT_KEYS`. Every transaction that
-  inserts an event locks the state row first, so the order of `seq` values is the order of the
-  commits.
+  (`src/migration/`). Most queries go through the entities. These keep raw SQL: `LOCK_STATE`,
+  `INSERT_SENT_KEY`, `PAYMENTS_FAILED`, `LAST_ISSUED_SEQ`, `NEWEST_SEQ`, `PRUNE_EVENTS` and
+  `PRUNE_SENT_KEYS`. Every transaction that inserts an event locks the state row first, so the
+  order of `seq` values is the order of the commits.
 - `Store::record` signals the hub with the new event's `seq` right after the commit that inserted
   it, never before. A failed commit, or a record without a new event, signals nothing.
   `Store::initialize` writes the welcome event without a signal.
@@ -423,9 +388,8 @@ Settled ones are `PAID`, `CANCELLED`, `REFUNDED`, `WROTE_OFF` and `OVERPAID`.
   is tested before each use. Getting a connection has 10 s. The pool keeps no minimum, idle limit
   or lifetime, so sqlx runs no maintenance task and `Store::new` works outside a runtime. A
   connection the server closed while idle (`idle_session_timeout`, a restart,
-  `pg_terminate_backend`) is replaced at its next use, so the role no longer needs
-  `idle_session_timeout` at 0. The lock's connection is queried every 0.5 s, so it is never idle for
-  longer than that.
+  `pg_terminate_backend`) is replaced at its next use, so any `idle_session_timeout` works. The
+  lock's connection is queried every 0.5 s, so it is never idle for longer than that.
 - The writer lock (`pg_try_advisory_lock`) has a connection of its own, outside the pool, with the
   same keepalives, no statement or lock timeout because the migrations run there, and
   `client_min_messages=warning`. It is never tested before use: a failed test would quietly open a

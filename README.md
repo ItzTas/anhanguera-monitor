@@ -83,29 +83,13 @@ connects without TLS, so `sslmode=require` and the stricter modes fail at once. 
 message that never repeats the address, a URL without a password, the key=value form, several
 hosts, a URL without a host, and a query key it does not know. `CLAUDE.md` lists the exact forms.
 
-### Upgrading from 0.1.0
+### The database role
 
-The first start of this version keeps every row, including the device id, and drops 0.1.0's
-`goose_db_version` table. The monitor's role needs `CREATE` on its schema and must own that table.
-Without them the start stops with `permission denied for schema public` or `must be owner of table
-goose_db_version`, changes nothing, and the hub restarts the monitor in a loop until you fix the
-role. Run these as the monitor's role first:
-
-```sql
-SELECT has_schema_privilege(current_user, current_schema(), 'CREATE');
-SELECT tablename, tableowner FROM pg_tables
-WHERE schemaname = current_schema() AND tablename = 'goose_db_version';
-```
-
-The first must return `t`, and the second must show the monitor's role as `tableowner`. Later
-starts need the rights 0.1.0 needed and `SELECT` on `seaql_migrations`. Take a `pg_dump` of the
-database before the first start: once this version has run, 0.1.0 cannot use the database. Started
-on it anyway, 0.1.0 exits with `relation "monitor_state" already exists` and changes no data, but
-it leaves a `goose_db_version` table behind that you can drop by hand.
-
-The hub's log shows `database migrations applied` with the two migration names on the first start,
-and with `[]` on every later one. A role that used to need `idle_session_timeout` at `0` no longer
-does.
+The first start creates the tables, so the monitor's role needs `CREATE` on its schema for that
+start. Later starts send no DDL and work with `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the
+tables, `USAGE` and `SELECT` on `events_seq_seq`, and `SELECT` on `seaql_migrations`. The hub's log
+shows `database migrations applied` with the migration's name on the first start, and with `[]` on
+every later one.
 
 ## Releases
 
