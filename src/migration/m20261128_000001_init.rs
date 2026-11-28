@@ -1,4 +1,8 @@
--- +goose Up
+use sea_orm::{ConnectionTrait, DbErr, DeriveMigrationName};
+use sea_orm_migration::async_trait::async_trait;
+use sea_orm_migration::{MigrationTrait, SchemaManager};
+
+const CREATE_TABLES: &str = "
 CREATE TABLE monitor_state (
     singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
     device_id TEXT NOT NULL,
@@ -22,7 +26,7 @@ CREATE TABLE events (
 CREATE TABLE sent_keys (key TEXT PRIMARY KEY, sent_at TIMESTAMPTZ NOT NULL);
 
 CREATE TABLE invoices (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
     course_enrollment_id TEXT NOT NULL,
     due_date DATE NOT NULL,
     status TEXT NOT NULL,
@@ -31,7 +35,8 @@ CREATE TABLE invoices (
     announced BOOLEAN NOT NULL DEFAULT FALSE,
     closed_at TIMESTAMPTZ,
     overdue_count BIGINT NOT NULL DEFAULT 0,
-    last_overdue_at TIMESTAMPTZ
+    last_overdue_at TIMESTAMPTZ,
+    PRIMARY KEY (course_enrollment_id, id)
 );
 
 CREATE TABLE enrollments (
@@ -45,11 +50,18 @@ CREATE TABLE problems (
     area TEXT NOT NULL,
     first_seen_at TIMESTAMPTZ NOT NULL
 );
+";
 
--- +goose Down
-DROP TABLE problems;
-DROP TABLE enrollments;
-DROP TABLE invoices;
-DROP TABLE sent_keys;
-DROP TABLE events;
-DROP TABLE monitor_state;
+#[derive(DeriveMigrationName)]
+pub(crate) struct Migration;
+
+#[async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(CREATE_TABLES)
+            .await?;
+        Ok(())
+    }
+}

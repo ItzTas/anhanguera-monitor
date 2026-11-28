@@ -4,7 +4,7 @@ use std::error::Error;
 use std::time::{Duration, Instant};
 
 use anhanguera_monitor::events::NewEvent;
-use anhanguera_monitor::migration::{DROP_GOOSE_DB_VERSION, GOOSE_SCHEMA};
+use anhanguera_monitor::migration::INIT;
 use anhanguera_monitor::store::{
     EnrollmentState, KnownInvoice, LOCK_CHECK_EVERY, LOCK_CHECK_LIMIT, RecordBatch, Store,
     StoreError, acquire_writer_lock,
@@ -819,7 +819,7 @@ async fn migrate_applies_the_migrations_once() {
     let first = lock.migrate().await.expect("migrate");
     let again = lock.migrate().await.expect("migrate again");
 
-    assert_eq!(first, [GOOSE_SCHEMA, DROP_GOOSE_DB_VERSION]);
+    assert_eq!(first, [INIT]);
     assert_eq!(again, Vec::<String>::new());
     assert_eq!(table_names(&admin(&db.url).await).await, TODAYS_TABLES);
 }

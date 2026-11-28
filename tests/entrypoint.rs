@@ -105,7 +105,7 @@ async fn second_process_refuses_to_start() {
         "acquiring the database writer lock: another anhanguera-monitor process holds the database lock"
     );
     assert_eq!(texts(&client, RECORDED_VERSIONS).await, before);
-    assert_eq!(before.len(), 2, "{before:?}");
+    assert_eq!(before.len(), 1, "{before:?}");
     assert!(second_portal.requests().is_empty());
     let stopped = first.stop();
     assert_eq!(stopped.status.code(), Some(0), "{}", stopped.stderr);

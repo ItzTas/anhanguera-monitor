@@ -35,7 +35,6 @@ RUN mkdir src && touch src/lib.rs && cargo fetch --locked
 
 COPY src src
 COPY settings.json ./
-COPY sql sql
 COPY queries queries
 
 ARG TARGETARCH
