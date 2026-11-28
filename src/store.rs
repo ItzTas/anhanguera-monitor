@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn the_store_settings_come_after_the_urls_own() {
-        let url = with_query(URL, "options=-c%20statement_timeout%3D1&keepalives_idle=5");
+        let url = with_query(URL, "options=-c%20statement_timeout%3D1");
         let options = with_limits(database_options(&url).expect("options"), POOL_LIMITS);
         assert_eq!(
             options.get_options(),
@@ -628,10 +628,6 @@ mod tests {
         let ipv6 =
             database_options("postgres://anhanguera:hunter2@[::1]:5432/anhanguera").expect("IPv6");
         assert_eq!(ipv6.get_host(), "::1");
-        let dropped = database_options(&with_query(URL, "connect_timeout=5&keepalives=1"))
-            .expect("keys sqlx has no equivalent for");
-        let plain = database_options(URL).expect("options");
-        assert_eq!(format!("{dropped:?}"), format!("{plain:?}"));
 
         let refused = [
             "host=db user=anhanguera dbname=anhanguera",
@@ -644,6 +640,7 @@ mod tests {
             "postgres://anhanguera:hunter2@db/anhanguera?sslmode=sometimes",
             "postgres://anhanguera:hunter2@db/anhanguera?sslpassword=x",
             "postgres://anhanguera:hunter2@db/anhanguera?Password=x",
+            "postgres://anhanguera:hunter2@db/anhanguera?connect_timeout=5",
         ];
         for url in refused {
             let error = database_options(url).expect_err(url);
@@ -660,46 +657,12 @@ mod tests {
             assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
             assert_eq!(error.to_string(), NO_PASSWORD, "{url}");
         }
-        let not_honoured = [
-            (
-                "channel_binding=require",
-                "DATABASE_URL's channel_binding needs TLS, and the monitor connects without TLS",
-            ),
-            (
-                "sslnegotiation=direct",
-                "DATABASE_URL's sslnegotiation needs TLS, and the monitor connects without TLS",
-            ),
-            (
-                "target_session_attrs=read-write",
-                "DATABASE_URL's target_session_attrs needs a session check the monitor does not run",
-            ),
-        ];
-        for (parameter, text) in not_honoured {
-            let url = with_query(URL, parameter);
-            let error = database_options(&url).expect_err(&url);
-            assert!(matches!(error, StoreError::InvalidUrl(_)), "{url}");
-            assert_eq!(error.to_string(), text, "{url}");
-        }
     }
 
     #[test]
     fn url_query_values_never_reach_the_log() {
         let value = "s3cr3t-value";
-        let keys = [
-            "sslnegotiation",
-            "connect_timeout",
-            "tcp_user_timeout",
-            "keepalives",
-            "keepalives_idle",
-            "keepalives_interval",
-            "keepalives_retries",
-            "target_session_attrs",
-            "channel_binding",
-            "load_balance_hosts",
-            "sslpassword",
-            "Password",
-            "passfile",
-        ];
+        let keys = ["connect_timeout", "sslpassword", "Password", "passfile"];
         let mut errors = Vec::new();
         let events = captured(|| {
             for key in keys {

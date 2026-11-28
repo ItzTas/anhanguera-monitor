@@ -669,18 +669,6 @@ async fn invalid_url_never_echoes_the_address() {
             "postgres://anhanguera@db.internal/anhanguera?password=",
             "db.internal",
         ),
-        (
-            "postgres://anhanguera:hunter2@db.internal/anhanguera?channel_binding=require",
-            "db.internal",
-        ),
-        (
-            "postgres://anhanguera:hunter2@db.internal/anhanguera?sslnegotiation=direct",
-            "db.internal",
-        ),
-        (
-            "postgres://anhanguera:hunter2@db.internal/anhanguera?target_session_attrs=read-write",
-            "db.internal",
-        ),
     ];
     for (url, host) in refused {
         let Err(store) = Store::new(url) else {

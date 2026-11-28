@@ -53,7 +53,8 @@ pub(crate) fn database_options(database_url: &str) -> Result<PgConnectOptions, S
         .and_then(|host| host.strip_prefix('[')?.strip_suffix(']'))
         .filter(|_| !host_in_query)
         .map(str::to_owned);
-    let mut options = PgConnectOptions::from_url(&keys_sqlx_reads(url)?)
+    only_keys_sqlx_reads(&url)?;
+    let mut options = PgConnectOptions::from_url(&url)
         .map_err(|_| StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS))?;
     if let Some(address) = bare_ipv6 {
         options = options.host(&address);
@@ -73,8 +74,8 @@ pub(crate) fn database_options(database_url: &str) -> Result<PgConnectOptions, S
         .options(server_keepalives))
 }
 
-// sqlx logs every query key it does not read, value included, so it only gets the keys it reads.
-fn keys_sqlx_reads(mut url: Url) -> Result<Url, StoreError> {
+// sqlx logs every query key it does not read, value included, so any other key is refused.
+fn only_keys_sqlx_reads(url: &Url) -> Result<(), StoreError> {
     let read = [
         "sslmode",
         "ssl-mode",
@@ -95,59 +96,12 @@ fn keys_sqlx_reads(mut url: Url) -> Result<Url, StoreError> {
         "application_name",
         "options",
     ];
-    // Accepted by 0.1.0's client; sqlx has no equivalent, so they are left out.
-    let left_out = [
-        "sslnegotiation",
-        "connect_timeout",
-        "tcp_user_timeout",
-        "keepalives",
-        "keepalives_idle",
-        "keepalives_interval",
-        "keepalives_retries",
-        "target_session_attrs",
-        "channel_binding",
-        "load_balance_hosts",
-    ];
     let read_by_sqlx =
         |key: &str| read.contains(&key) || (key.starts_with("options[") && key.ends_with(']'));
-    let pairs: Vec<(String, String)> = url.query_pairs().into_owned().collect();
-    if pairs
-        .iter()
-        .any(|(key, _)| !read_by_sqlx(key) && !left_out.contains(&key.as_str()))
-    {
+    if url.query_pairs().any(|(key, _)| !read_by_sqlx(&key)) {
         return Err(StoreError::InvalidUrl(NOT_A_POSTGRES_ADDRESS));
     }
-    // sqlx cannot honour other values of these; left out, they would connect without what was asked.
-    let honoured_only_as = [
-        (
-            "channel_binding",
-            &["disable", "prefer"][..],
-            "DATABASE_URL's channel_binding needs TLS, and the monitor connects without TLS",
-        ),
-        (
-            "sslnegotiation",
-            &["postgres"][..],
-            "DATABASE_URL's sslnegotiation needs TLS, and the monitor connects without TLS",
-        ),
-        (
-            "target_session_attrs",
-            &["any"][..],
-            "DATABASE_URL's target_session_attrs needs a session check the monitor does not run",
-        ),
-    ];
-    let not_honoured = pairs.iter().find_map(|(key, value)| {
-        honoured_only_as
-            .iter()
-            .find(|(name, values, _)| name == key && !values.contains(&value.as_str()))
-            .map(|(_, _, refusal)| *refusal)
-    });
-    if let Some(refusal) = not_honoured {
-        return Err(StoreError::InvalidUrl(refusal));
-    }
-    url.set_query(None);
-    url.query_pairs_mut()
-        .extend_pairs(pairs.iter().filter(|(key, _)| read_by_sqlx(key)));
-    Ok(url)
+    Ok(())
 }
 
 pub(crate) fn with_limits(options: PgConnectOptions, limits: Limits) -> PgConnectOptions {

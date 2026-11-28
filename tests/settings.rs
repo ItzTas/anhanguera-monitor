@@ -364,7 +364,7 @@ fn a_database_address_the_start_refuses_is_refused() {
 
     let exited = run(&base_with_bytes(
         "DATABASE_URL",
-        b"postgres://anhanguera:s3cr3t-marker@db/anhanguera?target_session_attrs=read-write",
+        b"postgres://anhanguera:s3cr3t-marker@db/anhanguera?connect_timeout=5",
     ));
 
     assert_without_the_marker(&exited);
@@ -372,7 +372,7 @@ fn a_database_address_the_start_refuses_is_refused() {
         exited.stdout,
         concat!(
             r#"{"problems":[{"path":"database_url","#,
-            r#""message":"DATABASE_URL's target_session_attrs needs a session check the monitor does not run"}]}"#,
+            r#""message":"DATABASE_URL is not a valid Postgres address"}]}"#,
             "\n"
         )
     );
